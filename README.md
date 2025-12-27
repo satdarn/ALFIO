@@ -37,7 +37,7 @@ You'll need:
    - If you don't have it: `sudo apt install zig` (Ubuntu-ish)
    - Or download from https://ziglang.org/download/
 
-2. **A C compiler or x86 assembler** specifically GCC 
+2. **A C compiler or x86/aarch64 assembler** specifically GCC 
 
 ```
 git clone https://github.com/satdarn/ALFIO.git
