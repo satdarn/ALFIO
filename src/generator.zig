@@ -646,12 +646,15 @@ fn implict_zero_init(allocator: std.mem.Allocator, generator: *Generator) !void 
     }
 }
 
-pub fn saveAndCompileAssembly(allocator: std.mem.Allocator, code: []const u8, clean_up_flag: bool) !void {
+pub fn saveAndCompileAssembly(allocator: std.mem.Allocator, code: []const u8, output_name: []const u8, clean_up_flag: bool) !void {
     // Save assembly code to main.s
     const file = try std.fs.cwd().createFile("main.s", .{});
     defer file.close();
     try file.writeAll(code);
-    const result = try std.process.Child.run(.{ .allocator = allocator, .argv = &[_][]const u8{ "gcc", "-no-pie", "main.s", "-o", "main" } });
+    const result = try std.process.Child.run(.{ 
+        .allocator = allocator, 
+        .argv = &[_][]const u8{ "gcc", "-no-pie", "main.s", "-o", output_name } 
+    });
     std.debug.print("{s}", .{result.stdout});
     std.debug.print("{s}",.{ result.stderr});
 
