@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const Node = @import("nodes.zig").Node;
 const GlobalTable = @import("analysis_arm.zig").GlobalTable;
 const FunctionTable = @import("analysis_arm.zig").FunctionTable;
@@ -58,7 +59,7 @@ const ScratchRegistersEnum = enum { x9, x10, x11, x12, x13, x14, x15 };
 
 const ScratchRegisters = struct {
     in_use: [7]bool = .{false} ** 7,
-    
+
     pub fn scratch_alloc(self: *ScratchRegisters) ?ScratchRegistersEnum {
         for (&self.in_use, 0..) |*reg, i| {
             if (!reg.*) {
@@ -68,7 +69,7 @@ const ScratchRegisters = struct {
         }
         return null;
     }
-    
+
     pub fn scratch_free_by_name(self: *ScratchRegisters, name: []const u8) void {
         const reg = std.meta.stringToEnum(ScratchRegistersEnum, name) orelse {
             // Handle x0 (return register) specially
@@ -77,11 +78,11 @@ const ScratchRegisters = struct {
         };
         self.scratch_free(reg);
     }
-    
+
     pub fn scratch_free(self: *ScratchRegisters, reg: ScratchRegistersEnum) void {
         self.in_use[@intFromEnum(reg)] = false;
     }
-    
+
     pub fn reset(self: *ScratchRegisters) void {
         for (&self.in_use) |*reg| {
             reg.* = false;
@@ -121,20 +122,20 @@ fn generate_prolog(allocator: std.mem.Allocator, output: *std.ArrayList(u8)) !vo
 fn generate_function_prolog(allocator: std.mem.Allocator, generator: *Generator, function: *Node) !void {
     var buffer: [256]u8 = undefined;
     const registers = [_][]const u8{ "x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7" };
-    
+
     // AArch64 requires 16-byte stack alignment
     const aligned_frame_size = (generator.current_function_table.frame_size + 15) & ~@as(i64, 15);
-    
+
     const prolog =
         \\{s}:
-        \\     stp x29, x30, [sp, #-16]!
+        \\     stp x29, x30, [sp, -16]!
         \\     mov x29, sp
-        \\     sub sp, sp, #{d}
+        \\     sub sp, sp, {d}
     ;
 
     try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, prolog, .{ function.function_def.name, aligned_frame_size }));
     try generator.output.append(allocator, '\n');
-    
+
     // Store parameters to stack
     for (function.function_def.parameters.items, 0..) |param, i| {
         if (i >= 8) break; // Only first 8 params in registers
@@ -178,9 +179,9 @@ fn generate_statement(allocator: std.mem.Allocator, generator: *Generator, node:
 fn generate_function_call(allocator: std.mem.Allocator, generator: *Generator, function_call: *Node) !void {
     var buffer: [256]u8 = undefined;
     const registers = [_][]const u8{ "x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7" };
-    
+
     const param_count = function_call.function_call.parameter_expressions.items.len;
-    
+
     // Handle parameters beyond x0-x7 (push to stack in reverse order)
     if (param_count > 8) {
         var i: usize = param_count - 1;
@@ -190,7 +191,7 @@ fn generate_function_call(allocator: std.mem.Allocator, generator: *Generator, f
             generator.scratch_allocator.scratch_free_by_name(result_register);
         }
     }
-    
+
     // Load first 8 parameters into registers
     const max_reg_params = @min(param_count, 8);
     var i: usize = 0;
@@ -201,9 +202,9 @@ fn generate_function_call(allocator: std.mem.Allocator, generator: *Generator, f
         }
         generator.scratch_allocator.scratch_free_by_name(result_register);
     }
-    
+
     try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, "     bl {s}\n", .{function_call.function_call.name}));
-    
+
     // Clean up stack if we had extra parameters
     if (param_count > 8) {
         const stack_bytes = (param_count - 8) * 16;
@@ -216,7 +217,7 @@ fn generate_decleration(allocator: std.mem.Allocator, generator: *Generator, nod
     if (node.decleration.expression) |expression| {
         if (expression.* == .string_literal) {
             const variable = generator.current_function_table.get_parameter_or_variable(node.decleration.identifier) orelse return;
-            const str = expression.string_literal[1 .. expression.string_literal.len - 1];
+            const str = expression.string_literal.value[1 .. expression.string_literal.value.len - 1];
             for (str, 0..) |byte, i| {
                 try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, "     mov w8, #{d}\n", .{byte}));
                 try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, "     strb w8, [x29, #-{d}]\n", .{@abs(variable.offset) + i}));
@@ -235,13 +236,13 @@ fn generate_decleration(allocator: std.mem.Allocator, generator: *Generator, nod
 fn generate_assignment(allocator: std.mem.Allocator, generator: *Generator, assignment: *Node) !void {
     var buffer: [128]u8 = undefined;
     const result_register = try evaluate_expression(allocator, generator, assignment.assignment.expression);
-    
+
     if (assignment.assignment.identifier.* == .identifier) {
-        if (generator.current_function_table.get_parameter_or_variable(assignment.assignment.identifier.identifier)) |variable| {
+        if (generator.current_function_table.get_parameter_or_variable(assignment.assignment.identifier.identifier.name)) |variable| {
             try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, "     str {s}, [x29, #-{d}]\n", .{ result_register, @abs(variable.offset) }));
         }
     }
-    
+
     if (assignment.assignment.identifier.* == .array_index) {
         if (generator.current_function_table.get_parameter_or_variable(assignment.assignment.identifier.array_index.identifier)) |variable| {
             const index_reg = try evaluate_expression(allocator, generator, assignment.assignment.identifier.array_index.expression);
@@ -260,20 +261,20 @@ fn generate_assignment(allocator: std.mem.Allocator, generator: *Generator, assi
 
 fn generate_print(allocator: std.mem.Allocator, generator: *Generator, statement: *Node) !void {
     var buffer: [256]u8 = undefined;
-    const result_register = try evaluate_expression(allocator, generator, statement.print_statement);
-    
+    const result_register = try evaluate_expression(allocator, generator, statement.print_statement.expression);
+
     // Move result to x1 (second argument for printf)
     try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, "     mov x1, {s}\n", .{result_register}));
     // Load format string address to x0
     try generator.output.appendSlice(allocator, "     adrp x0, fmt_int\n     add x0, x0, :lo12:fmt_int\n");
     try generator.output.appendSlice(allocator, "     bl printf\n");
-    
+
     generator.scratch_allocator.scratch_free_by_name(result_register);
 }
 
 fn generator_byte_out_statement(allocator: std.mem.Allocator, generator: *Generator, statement: *Node) !void {
     var buffer: [1024]u8 = undefined;
-    const result_register = try evaluate_expression(allocator, generator, statement.byte_out_statement);
+    const result_register = try evaluate_expression(allocator, generator, statement.byte_out_statement.expression);
 
     // Linux syscall: write(1, buf, 1)
     // x8 = syscall number (64 for write)
@@ -300,24 +301,24 @@ fn generate_if(allocator: std.mem.Allocator, generator: *Generator, statement: *
     const end_lbl = generator.label_count.* + 1;
     generator.label_count.* += 1;
     var buffer: [128]u8 = undefined;
-    
+
     const result_register = try evaluate_expression(allocator, generator, statement.if_statement.expression);
     try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, "     cmp {s}, #0\n     b.eq .L_IF{d}\n", .{ result_register, false_lbl }));
     generator.scratch_allocator.scratch_free_by_name(result_register);
-    
+
     for (statement.if_statement.statement_list.items) |node| {
         try generate_statement(allocator, generator, node);
     }
-    
+
     try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, "     b .L_IF{d}\n", .{end_lbl}));
     try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, ".L_IF{d}:\n", .{false_lbl}));
-    
+
     if (statement.if_statement.else_statement) |else_statement| {
         if (else_statement.* == .if_statement) {
             try generate_if(allocator, generator, else_statement);
         }
         if (else_statement.* == .else_statement) {
-            for (else_statement.else_statement.items) |node| {
+            for (else_statement.else_statement.statement_list.items) |node| {
                 try generate_statement(allocator, generator, node);
             }
         }
@@ -329,56 +330,56 @@ fn generate_while(allocator: std.mem.Allocator, generator: *Generator, statement
     generator.label_count.* += 1;
     const start = generator.label_count.*;
     var buffer: [128]u8 = undefined;
-    
+
     try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, ".L_WHILE{d}:\n", .{start}));
     const result_register = try evaluate_expression(allocator, generator, statement.while_statement.expression);
-    
+
     generator.label_count.* += 1;
     const end = generator.label_count.*;
     try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, "     cmp {s}, #0\n     b.eq .L_WHILE{d}\n", .{ result_register, end }));
     generator.scratch_allocator.scratch_free_by_name(result_register);
-    
+
     for (statement.while_statement.statement_list.items) |node| {
         try generate_statement(allocator, generator, node);
     }
-    
+
     try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, "     b .L_WHILE{d}\n", .{start}));
     try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, ".L_WHILE{d}:\n", .{end}));
 }
 
 fn generate_return(allocator: std.mem.Allocator, generator: *Generator, statement: *Node) !void {
     var buffer: [256]u8 = undefined;
-    const result_register = try evaluate_expression(allocator, generator, statement.return_statement);
+    const result_register = try evaluate_expression(allocator, generator, statement.return_statement.expression);
     try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, "     mov x0, {s}\n     mov sp, x29\n     ldp x29, x30, [sp], #16\n     ret\n", .{result_register}));
     generator.scratch_allocator.scratch_free_by_name(result_register);
 }
 
 fn evaluate_expression(allocator: std.mem.Allocator, generator: *Generator, expression: *Node) GeneratorError![]const u8 {
     var buffer: [1024]u8 = undefined;
-    
+
     if (expression.* == .integer_literal) {
         if (generator.scratch_allocator.scratch_alloc()) |target| {
-            try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, "     mov {s}, #{d}\n", .{ @tagName(target), expression.integer_literal }));
+            try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, "     mov {s}, #{d}\n", .{ @tagName(target), expression.integer_literal.value }));
             return @tagName(target);
         }
     }
-    
+
     if (expression.* == .character_literal) {
         if (generator.scratch_allocator.scratch_alloc()) |target| {
-            try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, "     mov {s}, #{d}\n", .{ @tagName(target), expression.character_literal }));
+            try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, "     mov {s}, #{d}\n", .{ @tagName(target), expression.character_literal.value }));
             return @tagName(target);
         }
     }
-    
+
     if (expression.* == .identifier) {
         if (generator.scratch_allocator.scratch_alloc()) |target| {
-            if (generator.current_function_table.get_parameter_or_variable(expression.identifier)) |variable| {
+            if (generator.current_function_table.get_parameter_or_variable(expression.identifier.name)) |variable| {
                 try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, "     ldr {s}, [x29, #-{d}]\n", .{ @tagName(target), @abs(variable.offset) }));
             }
             return @tagName(target);
         }
     }
-    
+
     if (expression.* == .byte_in_statement) {
         if (generator.scratch_allocator.scratch_alloc()) |target| {
             // Linux syscall: read(0, buf, 1)
@@ -397,7 +398,7 @@ fn evaluate_expression(allocator: std.mem.Allocator, generator: *Generator, expr
             return @tagName(target);
         }
     }
-    
+
     if (expression.* == .array_index) {
         if (generator.scratch_allocator.scratch_alloc()) |target| {
             const array_var = generator.current_function_table.get_parameter_or_variable(expression.array_index.identifier) orelse unreachable;
@@ -416,10 +417,10 @@ fn evaluate_expression(allocator: std.mem.Allocator, generator: *Generator, expr
         try generate_function_call(allocator, generator, expression);
         return "x0";
     }
-    
+
     const left_target = try evaluate_expression(allocator, generator, expression.binary_op.left);
     const right_target = try evaluate_expression(allocator, generator, expression.binary_op.right);
-    
+
     switch (expression.binary_op.op) {
         .Add => {
             try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, "     add {s}, {s}, {s}\n", .{ left_target, left_target, right_target }));
@@ -474,7 +475,7 @@ fn evaluate_expression(allocator: std.mem.Allocator, generator: *Generator, expr
             const false_lbl = generator.label_count.* + 1;
             const end_lbl = generator.label_count.* + 2;
             generator.label_count.* += 2;
-            
+
             const and_asm =
                 \\     cmp {s}, #0
                 \\     b.eq .L{d}
@@ -503,7 +504,7 @@ fn evaluate_expression(allocator: std.mem.Allocator, generator: *Generator, expr
             const true_lbl = generator.label_count.* + 1;
             const end_lbl = generator.label_count.* + 2;
             generator.label_count.* += 2;
-            
+
             const or_asm =
                 \\     cmp {s}, #0
                 \\     b.ne .L{d}
@@ -546,12 +547,20 @@ pub fn saveAndCompileAssembly(allocator: std.mem.Allocator, code: []const u8, ou
     const file = try std.fs.cwd().createFile("main.s", .{});
     defer file.close();
     try file.writeAll(code);
-    const result = try std.process.Child.run(.{ 
-        .allocator = allocator, 
-        .argv = &[_][]const u8{ "gcc", "-no-pie", "main.s", "-o", output_name } 
+
+    const result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = if (builtin.target.cpu.arch == .x86_64)
+            // Cross-compile from x86_64 to aarch64
+            &[_][]const u8{ "aarch64-linux-gnu-gcc", "-static", "main.s", "-o", output_name }
+        else if (builtin.target.cpu.arch == .aarch64)
+            // Native compilation on aarch64
+            &[_][]const u8{ "gcc", "-no-pie", "main.s", "-o", output_name }
+        else
+            return error.UnsupportedArchitecture,
     });
     std.debug.print("{s}", .{result.stdout});
-    std.debug.print("{s}",.{ result.stderr});
+    std.debug.print("{s}", .{result.stderr});
 
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);

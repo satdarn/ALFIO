@@ -17,6 +17,7 @@ pub const Parser = struct {
     allocator: std.mem.Allocator,
     token_list: *TokenList,
     had_error: bool = false,
+    line: u32 = 0,
 
     pub fn init(allocator: std.mem.Allocator, token_list: *TokenList) Parser {
         return Parser{
@@ -64,7 +65,8 @@ pub const Parser = struct {
     pub fn expectTypeKeyword(self: *Parser, expected: []const u8) bool {
         if (!self.ok()) return false;
         if (self.token_list.isPeekTypeKeyword(expected)) {
-            _ = self.token_list.consume();
+            const tok = self.token_list.consume();
+            self.line = tok.?.line;
             return true;
         }
         self.fail("Expected '{s}'", .{expected});
@@ -74,7 +76,8 @@ pub const Parser = struct {
     pub fn expectKeyword(self: *Parser, expected: []const u8) bool {
         if (!self.ok()) return false;
         if (self.token_list.isPeekKeyword(expected)) {
-            _ = self.token_list.consume();
+            const tok = self.token_list.consume();
+            self.line = tok.?.line;
             return true;
         }
         self.fail("Expected '{s}'", .{expected});
@@ -84,7 +87,8 @@ pub const Parser = struct {
     pub fn expectIdent(self: *Parser, expected: []const u8) bool {
         if (!self.ok()) return false;
         if (self.token_list.isPeekIdent(expected)) {
-            _ = self.token_list.consume();
+            const tok = self.token_list.consume();
+            self.line = tok.?.line;
             return true;
         }
         self.fail("Expected '{s}'", .{expected});
@@ -94,7 +98,8 @@ pub const Parser = struct {
     pub fn expectChar(self: *Parser, char: u8) bool {
         if (!self.ok()) return false;
         if (self.token_list.isPeekChar(char)) {
-            _ = self.token_list.consume();
+            const tok = self.token_list.consume();
+            self.line = tok.?.line;
             return true;
         }
         self.fail("Expected '{c}'", .{char});
@@ -108,7 +113,8 @@ pub const Parser = struct {
             return null;
         };
         if (token.data == .type_keyword) {
-            _ = self.token_list.consume();
+            const tok = self.token_list.consume();
+            self.line = tok.?.line;
             return token.data.type_keyword;
         }
         self.fail("Expected type_keyword", .{});
@@ -122,7 +128,8 @@ pub const Parser = struct {
             return null;
         };
         if (token.data == .identifier) {
-            _ = self.token_list.consume();
+            const tok = self.token_list.consume();
+            self.line = tok.?.line;
             return token.data.identifier;
         }
         self.fail("Expected identifier", .{});
@@ -132,7 +139,8 @@ pub const Parser = struct {
     pub fn consumeIfTypeKeyword(self: *Parser, ident: []const u8) bool {
         if (!self.ok()) return false;
         if (self.token_list.isPeekTypeKeyword(ident)) {
-            _ = self.token_list.consume();
+            const tok = self.token_list.consume();
+            self.line = tok.?.line;
             return true;
         }
         return false;
@@ -141,7 +149,8 @@ pub const Parser = struct {
     pub fn consumeIfKeyword(self: *Parser, ident: []const u8) bool {
         if (!self.ok()) return false;
         if (self.token_list.isPeekKeyword(ident)) {
-            _ = self.token_list.consume();
+            const tok = self.token_list.consume();
+            self.line = tok.?.line;
             return true;
         }
         return false;
@@ -150,7 +159,8 @@ pub const Parser = struct {
     pub fn consumeIfIdent(self: *Parser, ident: []const u8) bool {
         if (!self.ok()) return false;
         if (self.token_list.isPeekIdent(ident)) {
-            _ = self.token_list.consume();
+            const tok = self.token_list.consume();
+            self.line = tok.?.line;
             return true;
         }
         return false;
@@ -159,7 +169,8 @@ pub const Parser = struct {
     pub fn consumeIfChar(self: *Parser, char: u8) bool {
         if (!self.ok()) return false;
         if (self.token_list.isPeekChar(char)) {
-            _ = self.token_list.consume();
+            const tok = self.token_list.consume();
+            self.line = tok.?.line;
             return true;
         }
         return false;
@@ -210,6 +221,7 @@ fn parse_function_def(parser: *Parser) ?*Node {
         ident,
         param,
         return_type,
+        parser.line,
     ) catch {
         parser.fail("Failed to create function def node", .{});
         return null;
@@ -259,7 +271,12 @@ fn parse_function_parameters(parser: *Parser) ?std.ArrayList(*Node) {
             return null;
         };
 
-        const parameter = Node.create_function_parameter(parser.allocator, parameter_ident, parameter_type) catch {
+        const parameter = Node.create_function_parameter(
+            parser.allocator,
+            parameter_ident,
+            parameter_type,
+            parser.line,
+        ) catch {
             parser.fail("Out of memory", .{});
             return null;
         };
@@ -284,6 +301,9 @@ fn parse_statement(parser: *Parser) ?*Node {
     if (parse_return_statement(parser)) |return_statement| {
         return return_statement;
     }
+    if (parse_break_statement(parser)) |break_statement| {
+        return break_statement;
+    }
     if (parse_if_statement(parser)) |if_statement| {
         return if_statement;
     }
@@ -292,6 +312,12 @@ fn parse_statement(parser: *Parser) ?*Node {
     }
     if (parse_function_call_statement(parser)) |function_call_statement| {
         return function_call_statement;
+    }
+    if (parse_syscall_statement(parser)) |syscall_statement| {
+        return syscall_statement;
+    }
+    if (parse_deref_assignment(parser)) |deref_assignment| {
+        return deref_assignment;
     }
     if (parse_assignment(parser)) |assignment| {
         return assignment;
@@ -311,7 +337,13 @@ fn parse_decleration(parser: *Parser) ?*Node {
         };
     }
     if (!parser.expectChar(';')) return null;
-    return Node.create_decl_node(parser.allocator, ident, expr, _type) catch {
+    return Node.create_decl_node(
+        parser.allocator,
+        ident,
+        expr,
+        _type,
+        parser.line,
+    ) catch {
         parser.fail("Out of memory", .{});
         expr.?.destroy(parser.allocator);
         return null;
@@ -326,7 +358,11 @@ fn parse_print_statement(parser: *Parser) ?*Node {
     };
     if (!parser.expectChar(')')) return null;
     if (!parser.expectChar(';')) return null;
-    return Node.create_print_node(parser.allocator, expr) catch {
+    return Node.create_print_node(
+        parser.allocator,
+        expr,
+        parser.line,
+    ) catch {
         parser.fail("Out of memory", .{});
         expr.destroy(parser.allocator);
         return null;
@@ -341,7 +377,11 @@ fn parse_byte_out_statement(parser: *Parser) ?*Node {
     };
     if (!parser.expectChar(')')) return null;
     if (!parser.expectChar(';')) return null;
-    return Node.create_byte_out_node(parser.allocator, expr) catch {
+    return Node.create_byte_out_node(
+        parser.allocator,
+        expr,
+        parser.line,
+    ) catch {
         parser.fail("Out of memory", .{});
         expr.destroy(parser.allocator);
         return null;
@@ -351,7 +391,10 @@ fn parse_byte_in_statement(parser: *Parser) ?*Node {
     if (!parser.consumeIfKeyword("byte_in")) return null;
     if (!parser.expectChar('(')) return null;
     if (!parser.expectChar(')')) return null;
-    return Node.create_byte_in_node(parser.allocator) catch {
+    return Node.create_byte_in_node(
+        parser.allocator,
+        parser.line,
+    ) catch {
         parser.fail("Out of memory", .{});
         return null;
     };
@@ -363,9 +406,25 @@ fn parse_return_statement(parser: *Parser) ?*Node {
         return null;
     };
     if (!parser.expectChar(';')) return null;
-    return Node.create_return_node(parser.allocator, expr) catch {
+    return Node.create_return_node(
+        parser.allocator,
+        expr,
+        parser.line,
+    ) catch {
         parser.fail("Out of memory", .{});
         expr.destroy(parser.allocator);
+        return null;
+    };
+}
+
+fn parse_break_statement(parser: *Parser) ?*Node {
+    if (!parser.consumeIfKeyword("break")) return null;
+    if (!parser.expectChar(';')) return null;
+    return Node.create_break_node(
+        parser.allocator,
+        parser.line,
+    ) catch {
+        parser.fail("Out of memory", .{});
         return null;
     };
 }
@@ -379,7 +438,11 @@ fn parse_if_statement(parser: *Parser) ?*Node {
     if (!parser.expectChar(')')) return null;
     if (!parser.expectChar('{')) return null;
 
-    const if_statement_node = Node.create_if_node(parser.allocator, expr) catch {
+    const if_statement_node = Node.create_if_node(
+        parser.allocator,
+        expr,
+        parser.line,
+    ) catch {
         parser.fail("Out of memory", .{});
         return null;
     };
@@ -413,7 +476,10 @@ fn parse_if_statement(parser: *Parser) ?*Node {
             if_statement_node.destroy(parser.allocator);
             return null;
         }
-        const else_statement = Node.create_else_node(parser.allocator) catch {
+        const else_statement = Node.create_else_node(
+            parser.allocator,
+            parser.line,
+        ) catch {
             parser.fail("Out of memory", .{});
             if_statement_node.destroy(parser.allocator);
             return null;
@@ -422,7 +488,7 @@ fn parse_if_statement(parser: *Parser) ?*Node {
         while (!parser.token_list.isPeekChar('}') and parser.ok()) {
             const statement = parse_statement(parser);
             if (statement) |stmt| {
-                else_statement.else_statement.append(
+                else_statement.else_statement.statement_list.append(
                     parser.allocator,
                     stmt,
                 ) catch {
@@ -454,7 +520,11 @@ fn parse_while_statement(parser: *Parser) ?*Node {
     if (!parser.expectChar(')')) return null;
     if (!parser.expectChar('{')) return null;
 
-    const while_statement_node = Node.create_while_node(parser.allocator, expr) catch {
+    const while_statement_node = Node.create_while_node(
+        parser.allocator,
+        expr,
+        parser.line,
+    ) catch {
         parser.fail("Out of memory", .{});
         return null;
     };
@@ -481,6 +551,47 @@ fn parse_while_statement(parser: *Parser) ?*Node {
     }
     return while_statement_node;
 }
+fn parse_deref_assignment(parser: *Parser) ?*Node {
+    if (!parser.consumeIfChar('*')) return null;
+    var ptr_expr: *Node = undefined;
+    if (parser.consumeIfChar('(')) {
+        const cast_type = parser.expectAnyTypeKeyword() orelse return null;
+        if (!parser.expectChar(')')) return null;
+        const lhs_expr = parse_factor(parser) orelse {
+            parser.fail("Expected expression after cast", .{});
+            return null;
+        };
+        ptr_expr = Node.create_cast_node(
+            parser.allocator,
+            cast_type,
+            lhs_expr,
+            parser.line,
+        ) catch {
+            parser.fail("Out of memory", .{});
+            return null;
+        };
+    }
+    if (!parser.expectChar('=')) {
+        ptr_expr.destroy(parser.allocator);
+        return null;
+    }
+    if (parse_expression(parser)) |expr| {
+        if (!parser.consumeIfChar(';')) return null;
+        return Node.create_deref_assignment_node(
+            parser.allocator,
+            ptr_expr,
+            expr,
+            parser.line,
+        ) catch {
+            parser.fail("Out of memory", .{});
+            ptr_expr.destroy(parser.allocator);
+            expr.destroy(parser.allocator);
+            return null;
+        };
+    }
+    ptr_expr.destroy(parser.allocator);
+    return null;
+}
 fn parse_assignment(parser: *Parser) ?*Node {
     const ident = parser.token_list.peek() orelse return null;
     if (ident.data != .identifier) return null;
@@ -497,7 +608,12 @@ fn parse_assignment(parser: *Parser) ?*Node {
         if (!parser.expectChar('=')) return null;
         const expr = parse_expression(parser) orelse return null;
         if (!parser.expectChar(';')) return null;
-        const identifier = Node.create_array_index_node(parser.allocator, ident.data.identifier, index_expr) catch {
+        const identifier = Node.create_array_index_node(
+            parser.allocator,
+            ident.data.identifier,
+            index_expr,
+            parser.line,
+        ) catch {
             parser.fail("Out of memory", .{});
             expr.destroy(parser.allocator);
             return null;
@@ -506,9 +622,11 @@ fn parse_assignment(parser: *Parser) ?*Node {
             parser.allocator,
             identifier,
             expr,
+            parser.line,
         ) catch {
             parser.fail("Out of memory", .{});
             expr.destroy(parser.allocator);
+            identifier.destroy(parser.allocator);
             return null;
         };
     }
@@ -520,7 +638,11 @@ fn parse_assignment(parser: *Parser) ?*Node {
             return null;
         };
         if (!parser.expectChar(';')) return null;
-        const identifier = Node.create_identifier(parser.allocator, ident.data.identifier) catch {
+        const identifier = Node.create_identifier(
+            parser.allocator,
+            ident.data.identifier,
+            parser.line,
+        ) catch {
             parser.fail("Out of memory", .{});
             return null;
         };
@@ -528,6 +650,7 @@ fn parse_assignment(parser: *Parser) ?*Node {
             parser.allocator,
             identifier,
             expr,
+            parser.line,
         ) catch {
             parser.fail("Out of memory", .{});
             expr.destroy(parser.allocator);
@@ -535,6 +658,45 @@ fn parse_assignment(parser: *Parser) ?*Node {
         };
     }
     return null;
+}
+
+fn parse_syscall(parser: *Parser) ?*Node {
+    if (!parser.consumeIfKeyword("syscall")) return null;
+    if (!parser.expectChar('(')) return null;
+    const syscall = Node.create_syscall_node(
+        parser.allocator,
+        parser.line,
+    ) catch {
+        parser.fail("Out of memory", .{});
+        return null;
+    };
+    if (!parser.token_list.isPeekChar(')')) {
+        while (true) {
+            const arg = parse_expression(parser) orelse {
+                parser.fail("Expected argument expression", .{});
+                syscall.destroy(parser.allocator);
+                return null;
+            };
+
+            syscall.syscall.parameter_expressions.append(parser.allocator, arg) catch {
+                parser.fail("Failed to add argument", .{});
+                syscall.destroy(parser.allocator);
+                return null;
+            };
+
+            if (parser.consumeIfChar(',')) {
+                continue;
+            } else if (parser.token_list.isPeekChar(')')) {
+                break;
+            } else {
+                parser.fail("Expected ',' or ')'", .{});
+                syscall.destroy(parser.allocator);
+                return null;
+            }
+        }
+    }
+    if (!parser.expectChar(')')) return null;
+    return syscall;
 }
 
 fn parse_function_call(parser: *Parser) ?*Node {
@@ -554,7 +716,11 @@ fn parse_function_call(parser: *Parser) ?*Node {
     _ = parser.token_list.consume();
     _ = parser.token_list.consume();
 
-    var function_call = Node.create_function_call_node(parser.allocator, ident.data.identifier) catch {
+    var function_call = Node.create_function_call_node(
+        parser.allocator,
+        ident.data.identifier,
+        parser.line,
+    ) catch {
         parser.fail("Out of memory", .{});
         parser.token_list.current_token = start_token;
         return null;
@@ -615,6 +781,23 @@ fn parse_function_call_statement(parser: *Parser) ?*Node {
 
     return call;
 }
+fn parse_syscall_statement(parser: *Parser) ?*Node {
+    const start_token = parser.token_list.current_token;
+
+    const call = parse_syscall(parser);
+    if (call == null) {
+        parser.token_list.current_token = start_token;
+        return null;
+    }
+
+    if (!parser.expectChar(';')) {
+        call.?.destroy(parser.allocator);
+        parser.token_list.current_token = start_token;
+        return null;
+    }
+
+    return call;
+}
 
 fn parse_expression(parser: *Parser) ?*Node {
     const current_token = parser.token_list.current_token;
@@ -622,67 +805,133 @@ fn parse_expression(parser: *Parser) ?*Node {
         if (parser.token_list.isPeekChar('+')) {
             _ = parser.token_list.consume();
             if (parse_expression(parser)) |expression| {
-                return Node.create_binary_op_node(parser.allocator, .Add, term, expression) catch null;
+                return Node.create_binary_op_node(
+                    parser.allocator,
+                    .Add,
+                    term,
+                    expression,
+                    parser.line,
+                ) catch null;
             }
         }
         if (parser.token_list.isPeekChar('-')) {
             _ = parser.token_list.consume();
             if (parse_expression(parser)) |expression| {
-                return Node.create_binary_op_node(parser.allocator, .Sub, term, expression) catch null;
+                return Node.create_binary_op_node(
+                    parser.allocator,
+                    .Sub,
+                    term,
+                    expression,
+                    parser.line,
+                ) catch null;
             }
         }
         if (parser.token_list.isPeekChar('%')) {
             _ = parser.token_list.consume();
             if (parse_expression(parser)) |expression| {
-                return Node.create_binary_op_node(parser.allocator, .Mod, term, expression) catch null;
+                return Node.create_binary_op_node(
+                    parser.allocator,
+                    .Mod,
+                    term,
+                    expression,
+                    parser.line,
+                ) catch null;
             }
         }
         if (parser.token_list.isPeekChar('<')) {
             _ = parser.token_list.consume();
             if (parse_expression(parser)) |expression| {
-                return Node.create_binary_op_node(parser.allocator, .Lt, term, expression) catch null;
+                return Node.create_binary_op_node(
+                    parser.allocator,
+                    .Lt,
+                    term,
+                    expression,
+                    parser.line,
+                ) catch null;
             }
         }
         if (parser.token_list.isPeekChar('>')) {
             _ = parser.token_list.consume();
             if (parse_expression(parser)) |expression| {
-                return Node.create_binary_op_node(parser.allocator, .Gt, term, expression) catch null;
+                return Node.create_binary_op_node(
+                    parser.allocator,
+                    .Gt,
+                    term,
+                    expression,
+                    parser.line,
+                ) catch null;
             }
         }
         if (parser.token_list.isPeekDouble("==")) {
             _ = parser.token_list.consume();
             if (parse_expression(parser)) |expression| {
-                return Node.create_binary_op_node(parser.allocator, .Eql, term, expression) catch null;
+                return Node.create_binary_op_node(
+                    parser.allocator,
+                    .Eql,
+                    term,
+                    expression,
+                    parser.line,
+                ) catch null;
             }
         }
         if (parser.token_list.isPeekDouble("!=")) {
             _ = parser.token_list.consume();
             if (parse_expression(parser)) |expression| {
-                return Node.create_binary_op_node(parser.allocator, .Neq, term, expression) catch null;
+                return Node.create_binary_op_node(
+                    parser.allocator,
+                    .Neq,
+                    term,
+                    expression,
+                    parser.line,
+                ) catch null;
             }
         }
         if (parser.token_list.isPeekDouble("<=")) {
             _ = parser.token_list.consume();
             if (parse_expression(parser)) |expression| {
-                return Node.create_binary_op_node(parser.allocator, .Leq, term, expression) catch null;
+                return Node.create_binary_op_node(
+                    parser.allocator,
+                    .Leq,
+                    term,
+                    expression,
+                    parser.line,
+                ) catch null;
             }
         }
         if (parser.token_list.isPeekDouble(">=")) {
             _ = parser.token_list.consume();
             if (parse_expression(parser)) |expression| {
-                return Node.create_binary_op_node(parser.allocator, .Geq, term, expression) catch null;
+                return Node.create_binary_op_node(
+                    parser.allocator,
+                    .Geq,
+                    term,
+                    expression,
+                    parser.line,
+                ) catch null;
             }
         }
         if (parser.token_list.isPeekDouble("&&")) {
             _ = parser.token_list.consume();
             if (parse_expression(parser)) |expression| {
-                return Node.create_binary_op_node(parser.allocator, .And, term, expression) catch null;
+                return Node.create_binary_op_node(
+                    parser.allocator,
+                    .And,
+                    term,
+                    expression,
+                    parser.line,
+                ) catch null;
             }
         }
         if (parser.token_list.isPeekDouble("||")) {
             _ = parser.token_list.consume();
             if (parse_expression(parser)) |expression| {
-                return Node.create_binary_op_node(parser.allocator, .Or, term, expression) catch null;
+                return Node.create_binary_op_node(
+                    parser.allocator,
+                    .Or,
+                    term,
+                    expression,
+                    parser.line,
+                ) catch null;
             }
         } else {
             return term;
@@ -697,14 +946,26 @@ fn parse_term(parser: *Parser) ?*Node {
         if (parser.token_list.isPeekChar('*')) {
             current_token = parser.token_list.consume();
             if (parse_term(parser)) |term| {
-                return Node.create_binary_op_node(parser.allocator, .Mult, factor, term) catch null;
+                return Node.create_binary_op_node(
+                    parser.allocator,
+                    .Mult,
+                    factor,
+                    term,
+                    parser.line,
+                ) catch null;
             }
         }
 
         if (parser.token_list.isPeekChar('/')) {
             current_token = parser.token_list.consume();
             if (parse_term(parser)) |term| {
-                return Node.create_binary_op_node(parser.allocator, .Div, factor, term) catch null;
+                return Node.create_binary_op_node(
+                    parser.allocator,
+                    .Div,
+                    factor,
+                    term,
+                    parser.line,
+                ) catch null;
             }
         } else {
             return factor;
@@ -716,15 +977,107 @@ fn parse_term(parser: *Parser) ?*Node {
 
 fn parse_factor(parser: *Parser) ?*Node {
     const current_token = parser.token_list.current_token;
+    if (parser.token_list.isPeekChar('&')) {
+        _ = parser.token_list.consume();
+        if (parse_factor(parser)) |operand| {
+            return Node.create_unary_op_node(
+                parser.allocator,
+                .AddrOf,
+                operand,
+                parser.line,
+            ) catch null;
+        }
+        return null;
+    }
+    if (parser.token_list.isPeekChar('*')) {
+        _ = parser.token_list.consume();
+        if (parser.consumeIfChar('(')) {
+            if (parser.token_list.peek()) |tok| {
+                if (tok.data == .type_keyword) {
+                    const cast_type = parser.expectAnyTypeKeyword() orelse return null;
+                    if (!parser.expectChar(')')) return null;
+                    const expr = parse_factor(parser) orelse {
+                        parser.fail("Expected expression after cast", .{});
+                        return null;
+                    };
+                    const cast_node = Node.create_cast_node(
+                        parser.allocator,
+                        cast_type,
+                        expr,
+                        parser.line,
+                    ) catch null;
+                    if (cast_node) |cast| {
+                        return Node.create_unary_op_node(
+                            parser.allocator,
+                            .Dref,
+                            cast,
+                            parser.line,
+                        ) catch null;
+                    }
+                    return null;
+                }
+            }
+            parser.token_list.current_token = current_token;
+            _ = parser.token_list.consume(); // consume the '*' again
+        }
+
+        if (parse_factor(parser)) |operand| {
+            return Node.create_unary_op_node(
+                parser.allocator,
+                .Dref,
+                operand,
+                parser.line,
+            ) catch null;
+        }
+        return null;
+    }
+
+    if (parser.token_list.isPeekChar('-')) {
+        _ = parser.token_list.consume();
+        if (parse_factor(parser)) |operand| {
+            return Node.create_unary_op_node(
+                parser.allocator,
+                .Neg,
+                operand,
+                parser.line,
+            ) catch null;
+        }
+        return null;
+    }
+
+    if (parser.token_list.isPeekChar('!')) {
+        _ = parser.token_list.consume();
+        if (parse_factor(parser)) |operand| {
+            return Node.create_unary_op_node(
+                parser.allocator,
+                .Not,
+                operand,
+                parser.line,
+            ) catch null;
+        }
+        return null;
+    }
     if (parser.token_list.peek().?.data == .integer_literal) {
-        return Node.create_integer_literal(parser.allocator, parser.token_list.consume().?.data.integer_literal) catch null;
+        return Node.create_integer_literal(
+            parser.allocator,
+            parser.token_list.consume().?.data.integer_literal,
+            parser.line,
+        ) catch null;
     }
 
     if (parser.token_list.peek().?.data == .character_literal) {
-        return Node.create_character_literal(parser.allocator, parser.token_list.consume().?.data.character_literal) catch null;
+        return Node.create_character_literal(
+            parser.allocator,
+            parser.token_list.consume().?.data.character_literal,
+            parser.line,
+        ) catch null;
     }
     if (parser.token_list.peek().?.data == .string_literal) {
-        return Node.create_string_literal(parser.allocator, parser.token_list.consume().?.data.string_literal) catch null;
+        return Node.create_string_literal(
+            parser.allocator,
+            parser.token_list.consume().?.data.string_literal,
+            parser.line,
+        ) catch null;
     }
 
     if (parser.token_list.peek().?.data == .identifier) {
@@ -743,9 +1096,24 @@ fn parse_factor(parser: *Parser) ?*Node {
                 index_expr.destroy(parser.allocator);
                 return null;
             }
-            return Node.create_array_index_node(parser.allocator, identifier, index_expr) catch null;
+            return Node.create_array_index_node(
+                parser.allocator,
+                identifier,
+                index_expr,
+                parser.line,
+            ) catch null;
         }
-        return Node.create_identifier(parser.allocator, identifier) catch null;
+        return Node.create_identifier(
+            parser.allocator,
+            identifier,
+            parser.line,
+        ) catch null;
+    }
+
+    if (parser.token_list.isPeekKeyword("syscall")) {
+        if (parse_syscall(parser)) |syscall| {
+            return syscall;
+        }
     }
 
     if (parser.token_list.isPeekKeyword("byte_in")) {
@@ -755,6 +1123,31 @@ fn parse_factor(parser: *Parser) ?*Node {
     }
     if (parser.token_list.isPeekChar('(')) {
         _ = parser.token_list.consume();
+        if (parser.token_list.peek()) |tok| {
+            if (tok.data == .type_keyword) {
+                const cast_type = parser.expectAnyTypeKeyword() orelse return null;
+                if (parse_expression(parser)) |expression| {
+                    if (parser.token_list.isPeekChar(')')) {
+                        _ = parser.token_list.consume();
+                        return expression;
+                    }
+                }
+                if (!parser.expectChar(')')) return null;
+                const expr = parse_factor(parser) orelse {
+                    parser.fail("Expected expression after cast", .{});
+                    return null;
+                };
+                return Node.create_cast_node(
+                    parser.allocator,
+                    cast_type,
+                    expr,
+                    parser.line,
+                ) catch {
+                    parser.fail("Out of memory", .{});
+                    return null;
+                };
+            }
+        }
         if (parse_expression(parser)) |expression| {
             if (parser.token_list.isPeekChar(')')) {
                 _ = parser.token_list.consume();

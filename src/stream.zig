@@ -43,6 +43,12 @@ pub const InputStream = struct {
         }
         return 0;
     }
+    pub fn next_char(self: *InputStream) u8 {
+        if (self.data.len > self.pos) {
+            return self.data[self.pos + 1];
+        }
+        return 0;
+    }
     pub fn consume_substring(self: *InputStream, length: u64) []const u8 {
         // Gets the substring from the current pos of a certain length.
         // consumes the characters

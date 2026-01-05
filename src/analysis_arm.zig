@@ -46,7 +46,7 @@ pub const FunctionTable = struct {
         var frame_size: i64 = 0;
         var param_index: usize = 0;
         var param_iter = self.parameters.iterator();
-        
+
         // AArch64 calling convention: first 8 parameters in x0-x7
         while (param_iter.next()) |entry| {
             const var_entry = entry.value_ptr;
@@ -62,7 +62,7 @@ pub const FunctionTable = struct {
 
             param_index += 1;
         }
-        
+
         // Allocate space for local variables
         var var_iter = self.variables.iterator();
         while (var_iter.next()) |entry| {
@@ -75,7 +75,7 @@ pub const FunctionTable = struct {
             frame_size += size;
             var_entry.offset = -frame_size;
         }
-        
+
         // Now allocate space for the first 8 parameters on the stack
         // (we need to save them from registers)
         param_index = 0;
@@ -94,7 +94,7 @@ pub const FunctionTable = struct {
 
             param_index += 1;
         }
-        
+
         // AArch64 requires 16-byte stack alignment
         frame_size = alignUp(frame_size, 16);
         self.frame_size = frame_size;
@@ -188,7 +188,7 @@ fn variable_decleration_pass(allocator: std.mem.Allocator, symbol_table: *Global
         }
     }
     if (statement.* == .return_statement) {
-        if (!std.meta.eql(function_table.return_type, evaluate_expression_type(symbol_table, function_table, statement.return_statement))) unreachable;
+        if (!std.meta.eql(function_table.return_type, evaluate_expression_type(symbol_table, function_table, statement.return_statement.expression))) unreachable;
     }
     if (statement.* == .if_statement) {
         for (statement.if_statement.statement_list.items) |stmt| {
@@ -204,7 +204,7 @@ fn variable_decleration_pass(allocator: std.mem.Allocator, symbol_table: *Global
         }
     }
     if (statement.* == .else_statement) {
-        for (statement.else_statement.items) |stmt| {
+        for (statement.else_statement.statement_list.items) |stmt| {
             try variable_decleration_pass(allocator, symbol_table, function_table, stmt);
         }
     }
@@ -213,7 +213,7 @@ fn variable_decleration_pass(allocator: std.mem.Allocator, symbol_table: *Global
 fn type_checking_pass(symbol_table: *GlobalTable, function_table: *FunctionTable, statement: *Node) void {
     if (statement.* == .assignment) {
         if (statement.assignment.identifier.* == .identifier) {
-            const variable = function_table.get_parameter_or_variable(statement.assignment.identifier.identifier) orelse unreachable;
+            const variable = function_table.get_parameter_or_variable(statement.assignment.identifier.identifier.name) orelse unreachable;
             const variable_type = variable.type;
             if (!can_cast_to(variable_type, evaluate_expression_type(symbol_table, function_table, statement.assignment.expression))) unreachable;
         }
@@ -240,7 +240,7 @@ fn type_checking_pass(symbol_table: *GlobalTable, function_table: *FunctionTable
         }
     }
     if (statement.* == .else_statement) {
-        for (statement.else_statement.items) |stmt| {
+        for (statement.else_statement.statement_list.items) |stmt| {
             type_checking_pass(symbol_table, function_table, stmt);
         }
     }
@@ -248,12 +248,12 @@ fn type_checking_pass(symbol_table: *GlobalTable, function_table: *FunctionTable
 
 fn evaluate_expression_type(global_table: *GlobalTable, function_table: *FunctionTable, expression: *Node) Types {
     var _type: Types = .void;
-    if (expression.* == .integer_literal) return min_literal_size(expression.integer_literal);
+    if (expression.* == .integer_literal) return min_literal_size(expression.integer_literal.value);
     if (expression.* == .character_literal) return Types.char;
-    if (expression.* == .string_literal) return .{ .char_array = expression.string_literal.len - 1 };
+    if (expression.* == .string_literal) return .{ .char_array = expression.string_literal.value.len - 1 };
     if (expression.* == .byte_in_statement) return Types.char;
     if (expression.* == .identifier) {
-        return if (function_table.get_parameter_or_variable(expression.identifier)) |variable| variable.type else unreachable;
+        return if (function_table.get_parameter_or_variable(expression.identifier.name)) |variable| variable.type else unreachable;
     }
     if (expression.* == .array_index) return Types.char;
     if (expression.* == .function_call) {

@@ -3,9 +3,11 @@ const builtin = @import("builtin");
 const InputStream = @import("stream.zig").InputStream;
 const tokenize = @import("lexer.zig").tokenize;
 const parse = @import("parser.zig").parse;
-const analyize_x86 = @import("analysis.zig").analyize;
+const create_global_table = @import("tables.zig").create_global_table;
+const type_checking = @import("analysis.zig").type_checking;
 const generate_code_x86 = @import("generator.zig").generate_code;
 const saveAndCompileAssembly_x86 = @import("generator.zig").saveAndCompileAssembly;
+
 const analyize_arm = @import("analysis_arm.zig").analyize;
 const generate_code_arm = @import("generator_arm.zig").generate_code;
 const saveAndCompileAssembly_arm = @import("generator_arm.zig").saveAndCompileAssembly;
@@ -18,7 +20,7 @@ pub fn main() !void {
     var args = try std.process.argsWithAllocator(allocator);
     defer args.deinit();
     _ = args.skip();
-    
+
     const file_path = args.next() orelse {
         std.debug.print("Usage: program <file_path> [options]\n", .{});
         std.debug.print("Options:\n", .{});
@@ -30,7 +32,7 @@ pub fn main() !void {
     // Parse optional arguments
     var target_arch: ?std.Target.Cpu.Arch = null;
     var output_name: []const u8 = "main";
-    
+
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--arch")) {
             if (args.next()) |arch_name| {
@@ -62,7 +64,7 @@ pub fn main() !void {
 
     // Use provided architecture or detect current
     const arch = target_arch orelse builtin.cpu.arch;
-    
+
     std.debug.print("Compiling for architecture: {s}\n", .{@tagName(arch)});
     std.debug.print("Output binary: {s}\n", .{output_name});
 
@@ -71,21 +73,24 @@ pub fn main() !void {
 
     var token_list = try tokenize(allocator, &stream);
     defer token_list.deinit(allocator);
-    token_list.head.?.print_list();
+    // token_list.head.?.print();
 
     const ast = try parse(allocator, &token_list);
     defer ast.destroy(allocator);
 
-    ast.print(0);
+    // ast.print(0);
 
     // Select backend based on architecture
     switch (arch) {
         .x86_64 => {
             std.debug.print("Using x86_64 backend\n", .{});
-            const symbol_table = try analyize_x86(allocator, ast, true);
-            defer symbol_table.deinit(allocator);
-            symbol_table.calculate_offsets();
 
+            const symbol_table = try create_global_table(allocator, ast);
+            defer symbol_table.deinit(allocator);
+            try symbol_table.calculate_offsets();
+            try type_checking(symbol_table, ast);
+
+            // symbol_table.print_tables();
             const assembly = try generate_code_x86(allocator, ast, symbol_table);
             defer allocator.free(assembly);
 
@@ -101,7 +106,7 @@ pub fn main() !void {
             const assembly = try generate_code_arm(allocator, ast, symbol_table);
             defer allocator.free(assembly);
 
-            try saveAndCompileAssembly_arm(allocator, assembly, output_name, false);
+            try saveAndCompileAssembly_arm(allocator, assembly, output_name, true);
             std.debug.print("Compilation successful! Binary: ./{s}\n", .{output_name});
         },
         else => {

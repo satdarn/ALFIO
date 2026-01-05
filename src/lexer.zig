@@ -1,13 +1,14 @@
 const std = @import("std");
 const InputStream = @import("stream.zig").InputStream;
 
-const type_keywords = [_][]const u8{ "int", "void", "bool", "char" };
-const keywords = [_][]const u8{ "fn", "print", "byte_in", "byte_out", "return", "if", "else", "while" };
+const type_keywords = [_][]const u8{ "int", "void", "bool", "char", "word" };
+const keywords = [_][]const u8{ "break", "fn", "print", "byte_in", "byte_out", "syscall", "return", "if", "else", "while" };
 pub const BaseTypes = enum {
-    int,
     void,
     bool,
     char,
+    int,
+    word,
     char_array,
 };
 
@@ -17,23 +18,74 @@ fn as_type(base: BaseTypes) Types {
         .void => Types{ .void = {} },
         .bool => Types{ .bool = {} },
         .char => Types{ .char = {} },
+        .word => Types{ .word = {} },
         .char_array => Types{ .char_array = 1 },
     };
 }
-pub const Types = union(BaseTypes) {
-    int,
+pub const Types = union(enum) {
     void,
     bool,
     char,
+    int,
+    word,
     char_array: u64,
+
+    pub const Void: Types = .{ .void = {} };
+    pub const Bool: Types = .{ .bool = {} };
+    pub const Char: Types = .{ .char = {} };
+    pub const Int: Types = .{ .int = {} };
+    pub const Word: Types = .{ .word = {} };
+
     pub fn print(self: Types) void {
         switch (self) {
-            .int => std.debug.print("int", .{}),
             .void => std.debug.print("void", .{}),
             .bool => std.debug.print("bool", .{}),
             .char => std.debug.print("char", .{}),
+            .word => std.debug.print("word", .{}),
+            .int => std.debug.print("int", .{}),
             .char_array => |size| std.debug.print("char_array({})", .{size}),
         }
+    }
+    pub fn to_string(_type: Types, buffer: []u8) []const u8 {
+        return switch (_type) {
+            .void => {
+                return "void";
+            },
+            .bool => {
+                return "bool";
+            },
+            .char => {
+                return "char";
+            },
+            .int => {
+                return "int";
+            },
+            .word => {
+                return "word";
+            },
+            .char_array => |size| {
+                return std.fmt.bufPrint(buffer, "char[{d}]", .{size}) catch "char[?]";
+            },
+        };
+    }
+    pub fn size_of(self: Types) i64 {
+        return switch (self) {
+            .void => 0,
+            .bool => 1,
+            .char => 1,
+            .int => 4,
+            .word => 8,
+            .char_array => |size| @intCast(size),
+        };
+    }
+    pub fn eql(a: Types, b: Types) bool {
+        var buf_a: [256]u8 = undefined;
+        var buf_b: [256]u8 = undefined;
+
+        const sa = a.to_string(&buf_a);
+        const sb = b.to_string(&buf_b);
+
+        return std.mem.eql(u8, sa, sb);
     }
 };
 
@@ -180,14 +232,104 @@ pub fn tokenize(allocator: std.mem.Allocator, stream: *InputStream) !TokenList {
                 _ = stream.consume();
             }
             line += 1;
+            continue;
         }
+        // Handle string literals with escape sequences
         if (stream.current_char() == '"') {
+            _ = stream.consume(); // consume opening quote
+            // Use a temporary buffer to handle escape sequences
+            var buffer = try std.ArrayList(u8).initCapacity(allocator, 16);
+            defer buffer.deinit(allocator);
+            while (true) {
+                if (stream.current_char() == 0) {
+                    return error.UnterminatedString;
+                }
+                if (stream.current_char() == '\\') {
+                    _ = stream.consume(); // consume backslash
+                    const escaped_char: u8 = switch (stream.current_char()) {
+                        'n' => '\n',
+                        't' => '\t',
+                        'r' => '\r',
+                        '\\' => '\\',
+                        '"' => '"',
+                        '0' => 0,
+                        else => return error.InvalidEscapeSequence,
+                    };
+                    try buffer.append(allocator, escaped_char);
+                    _ = stream.consume(); // consume the escaped character
+                } else if (stream.current_char() == '"') {
+                    _ = stream.consume(); // consume closing quote
+                    break;
+                } else {
+                    try buffer.append(allocator, stream.current_char());
+                    _ = stream.consume();
+                }
+            }
+            const string_copy = try buffer.toOwnedSlice(allocator);
+            try token_list.append(allocator, .{ .string_literal = string_copy }, line);
+            continue;
+        }
+        if (stream.current_char() == '0' and stream.next_char() == 'x') {
             const start = stream.pos;
             _ = stream.consume();
-            while (stream.current_char() != '"' and stream.current_char() != 0) _ = stream.consume();
             _ = stream.consume();
-            const string_copy = try allocator.dupe(u8, stream.get_substring(start, stream.pos));
-            try token_list.append(allocator, .{ .string_literal = string_copy }, line);
+            while (std.ascii.isHex(stream.current_char())) _ = stream.consume();
+            const integer_literal = try std.fmt.parseInt(u64, stream.get_substring(start, stream.pos), 0);
+            try token_list.append(allocator, .{ .integer_literal = integer_literal }, line);
+            continue;
+        }
+        if (stream.current_char() == '0' and stream.next_char() == 'b') {
+            const start = stream.pos;
+            _ = stream.consume();
+            _ = stream.consume();
+            while (stream.current_char() == '1' or stream.current_char() == '0') _ = stream.consume();
+            const integer_literal = try std.fmt.parseInt(u64, stream.get_substring(start, stream.pos), 0);
+            try token_list.append(allocator, .{ .integer_literal = integer_literal }, line);
+            continue;
+        }
+        if (stream.current_char() == '\'') {
+            _ = stream.consume(); // consume opening quote
+            if (stream.current_char() == '\\') {
+                _ = stream.consume(); // consume backslash
+                const escaped_char: u8 = switch (stream.current_char()) {
+                    'n' => '\n',
+                    't' => '\t',
+                    'r' => '\r',
+                    '\\' => '\\',
+                    '\'' => '\'',
+                    '0' => 0,
+                    else => return error.InvalidEscapeSequence,
+                };
+                _ = stream.consume(); // consume escaped character
+                if (stream.current_char() != '\'') {
+                    return error.UnterminatedCharacterLiteral;
+                }
+                _ = stream.consume(); // consume closing quote
+                try token_list.append(allocator, .{ .character_literal = escaped_char }, line);
+                continue;
+            } else {
+                // Regular character
+                if (stream.current_char() == '\'' or stream.current_char() == 0) {
+                    return error.EmptyCharacterLiteral;
+                }
+                const char_value = stream.current_char();
+                _ = stream.consume(); // consume the character
+
+                if (stream.current_char() != '\'') {
+                    return error.UnterminatedCharacterLiteral;
+                }
+                _ = stream.consume(); // consume closing quote
+
+                try token_list.append(allocator, .{ .character_literal = char_value }, line);
+                continue;
+            }
+        }
+        if (std.ascii.isDigit(stream.current_char())) {
+            const start = stream.pos;
+            while (std.ascii.isDigit(stream.current_char())) _ = stream.consume();
+            const integer_literal = try std.fmt.parseInt(u64, stream.get_substring(start, stream.pos), 10);
+            try token_list.append(allocator, .{ .integer_literal = integer_literal }, line);
+            continue;
         }
 
         if (std.ascii.isWhitespace(stream.current_char())) {
@@ -202,16 +344,6 @@ pub fn tokenize(allocator: std.mem.Allocator, stream: *InputStream) !TokenList {
             while (std.ascii.isAlphabetic(stream.current_char()) or stream.current_char() == '_') _ = stream.consume();
             const ident_copy = try allocator.dupe(u8, stream.get_substring(start, stream.pos));
             try token_list.append(allocator, .{ .identifier = ident_copy }, line);
-            continue;
-        }
-        if (std.ascii.isDigit(stream.current_char())) {
-            const start = stream.pos;
-            while (std.ascii.isDigit(stream.current_char())) _ = stream.consume();
-            var integer_literal: u64 = 0;
-            for (stream.get_substring(start, stream.pos), 0..) |digit, i| {
-                integer_literal += (digit - '0') * std.math.pow(usize, 10, stream.pos - start - 1 - i);
-            }
-            try token_list.append(allocator, .{ .integer_literal = integer_literal }, line);
             continue;
         } else {
             try token_list.append(allocator, .{ .character = stream.consume() }, line);
@@ -366,40 +498,6 @@ pub fn tokenize(allocator: std.mem.Allocator, stream: *InputStream) !TokenList {
                         current = new_token.next;
                         token_list.len -= 1; // We removed two tokens and added one
                         continue;
-                    }
-                }
-            }
-            if (first_char == '\'') {
-                if (curr.next) |next| {
-                    if (next.data == .identifier and next.data.identifier.len == 1) {
-                        if (next.next) |next_next| {
-                            if (next_next.data == .character and next_next.data.character == '\'') {
-                                const new_token = try allocator.create(Token);
-                                new_token.data = .{ .character_literal = next.data.identifier[0] };
-                                new_token.prev = curr.prev;
-                                new_token.next = next_next.next;
-                                if (curr.prev) |prev| {
-                                    prev.next = new_token;
-                                } else {
-                                    token_list.head = new_token;
-                                }
-                                if (next_next.next) |next_next_next| {
-                                    next_next_next.prev = new_token;
-                                } else {
-                                    token_list.end = new_token;
-                                }
-                                if (token_list.current_token == curr or token_list.current_token == next or token_list.current_token == next_next) {
-                                    token_list.current_token = new_token;
-                                }
-                                allocator.destroy(curr);
-                                allocator.free(next.data.identifier);
-                                allocator.destroy(next);
-                                allocator.destroy(next_next);
-                                current = new_token.next;
-                                token_list.len -= 2; // We removed three tokens and added one
-                                continue;
-                            }
-                        }
                     }
                 }
             }

@@ -1,0 +1,180 @@
+fn main(argc: int, argv: word):void  {
+	# testa(argc, argv);
+	char[3] msg = "100";
+	print(ascii_to_integer(&msg));
+}
+fn testa(argc: int, argv: word): int {
+	int fd = 0;
+	if (argc > 1) {
+		fd = open(*(word)(argv + 8), 0, 0x0400);
+	}
+	word buffer = mmap(0, 4096, 0x7, 34, -1, 0);
+	word i = read(fd, buffer, 4096); 
+	while(i != 0) {
+		write(1, buffer, i);
+		i = read(fd, buffer, 4096); 
+	}
+	close(fd);
+	munmap(buffer, 4096);
+}
+fn testb(): void {
+	word bufa = mmap(0, 4096, 0x7, 34, -1, 0);
+	word bufb = mmap(0, 4096, 0x7, 34, -1, 0);
+	
+	memset(bufa, 49, 10);
+	memset(bufa + 10, 48, 10);
+	memset(bufb, 49, 20);
+	
+	*(char)(bufa+20) = (char) 0;
+	*(char)(bufb+20) = (char) 0;
+	
+	print(strcmp(bufb, bufa));
+	print(strcmp(bufa, bufb));
+
+	strcpy(bufa, bufb);
+
+	print(strcmp(bufb, bufa));
+	print(strcmp(bufa, bufb));
+
+	munmap(bufa, 4096);
+	munmap(bufb, 4096);
+}
+fn exit(err_code: int): void {	
+	syscall(0x3c, err_code);
+}
+
+fn open(file_name: word, flags: int, mode: word): int{
+	return (int)syscall(0x02, file_name, flags, mode);
+}
+
+fn close(file_descriptor: int): void{
+	syscall(0x03, file_descriptor);
+}
+
+fn write(fd: int, buf: word, count: int): void {
+	syscall(1, fd, buf, count);	
+}
+
+fn read(fd: int, buf: word, count: int): word {
+	return syscall(0, fd, buf, count);	
+}
+
+fn mmap(addr: word, length: word, prot: int, flags: int, fd: int, offset: word): word {
+	return syscall(9, addr, length, prot, flags, fd, offset);
+}
+
+fn munmap(addr: word, length: word): word{
+	return syscall(11, addr, length);
+}
+
+fn memcpy(dest: word, src: word, n:int): void {
+	int i = 0;
+	while( i < n) {
+		*(char)(dest + i) = *(char)(src + i);
+		i = i + 1;
+	}
+}
+
+fn memset(dest: word, value: char, n: int): void {
+	int i = 0;
+	while(i < n) {
+		*(char)(dest + i) = value;
+		i = i + 1;
+	}
+}
+
+fn memeql(a:word, b:word, n: int): bool {
+	int i = 0;
+	while (i < n) {
+		if ( (int)*(char)(a) != (int)*(char)(b)) {
+			byte_out(*(char)a);
+			byte_out(10);
+			byte_out(*(char)b);
+			return (bool)0;
+		}
+		a = a + 1;
+		b = b + 1;
+		i = i + 1;
+	}
+	return (bool)1;
+} 
+
+fn strlen(s: word): int {
+	int i = 0;
+	while(*(char)s != 0) {
+		i = i + 1;
+		s = s + 1;
+	}
+	return i;
+}
+
+fn strcmp(sa: word, sb: word): int {
+	int ret = 0;
+	while( (*(char)sa != 0) && (*(char)sa != 0)) {
+		if (ret != 0) {
+			return ret;
+		}
+		ret = (int)(*(char)sa - *(char)sb);
+		sa = sa + 1;
+		sb = sb + 1;
+	}
+	return ret;
+}
+fn strcpy(dest: word, src: word): void {
+	int len = strlen(src);
+	memcpy(dest, src, len);
+}
+
+fn print_string(str: word): void {
+	write(1, str, strlen(str));
+}
+
+fn is_digit(c:char): bool{
+	return (48 <= c) && (c <= 57);
+}
+
+fn exp(base: int, power: int): int {
+	int val = 1;
+	while(power != 0) {
+		val = val * base;
+	}
+	return val;
+}
+
+fn ascii_to_integer(str: word): int {
+    word str_ptr = str;
+    int val = 0;
+    int len = strlen(str);
+    int index = 0;
+    bool is_negative = (bool)0;
+    if (*(char)(str_ptr) == '-') {
+        is_negative = (bool)1;
+        str_ptr = str_ptr + 1;
+        len = len - 1;  
+    } else if (*(char)(str_ptr) == '+') {
+        str_ptr = str_ptr + 1;
+        len = len - 1;
+    }
+    while (index < len) {
+        char current_char = *(char)(str_ptr + index);
+        if (is_digit(current_char)) {
+            val = val * 10 + (current_char - 48);
+        } else {
+            break;
+        }
+        index = index + 1;
+    }
+    
+    if (is_negative) {
+        val = -val;
+    }
+    
+    return val;
+}
+fn alloc(size: word): word {
+	return 0x00;
+}
+
+fn free(ptr: word): void {
+
+}
