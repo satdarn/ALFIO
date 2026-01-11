@@ -51,7 +51,7 @@ pub const Node = union(enum) {
         line: u32,
     },
     return_statement: struct {
-        expression: *Node,
+        expression: ?*Node,
         line: u32,
     },
     break_statement: struct {
@@ -69,6 +69,13 @@ pub const Node = union(enum) {
     },
     while_statement: struct {
         expression: *Node,
+        statement_list: std.ArrayList(*Node),
+        line: u32,
+    },
+    for_statement: struct {
+        decleration: *Node,
+        condition: *Node,
+        statement: *Node,
         statement_list: std.ArrayList(*Node),
         line: u32,
     },
@@ -237,7 +244,7 @@ pub const Node = union(enum) {
         };
         return new_byte_out_node;
     }
-    pub fn create_return_node(allocator: std.mem.Allocator, expression: *Node, line: u32) !*Node {
+    pub fn create_return_node(allocator: std.mem.Allocator, expression: ?*Node, line: u32) !*Node {
         const new_return_node = try allocator.create(Node);
         new_return_node.* = .{
             .return_statement = .{
@@ -291,6 +298,20 @@ pub const Node = union(enum) {
             },
         };
         return new_while_node;
+    }
+    pub fn create_for_node(allocator: std.mem.Allocator, decleration: *Node, condition: *Node, statement: *Node, line: u32) !*Node {
+        const new_for_node = try allocator.create(Node);
+        const statement_list = try std.ArrayList(*Node).initCapacity(allocator, 10);
+        new_for_node.* = .{
+            .for_statement = .{
+                .decleration = decleration,
+                .condition = condition,
+                .statement = statement,
+                .statement_list = statement_list,
+                .line = line,
+            },
+        };
+        return new_for_node;
     }
     pub fn create_binary_op_node(allocator: std.mem.Allocator, operator: Node.BinaryOpEnum, left: *Node, right: *Node, line: u32) !*Node {
         const new_binary_op_node = try allocator.create(Node);
@@ -461,7 +482,7 @@ pub const Node = union(enum) {
                 return;
             },
             .return_statement => {
-                self.return_statement.expression.destroy(allocator);
+                if (self.return_statement.expression) |expr| expr.destroy(allocator);
                 allocator.destroy(self);
                 return;
             },
@@ -494,6 +515,17 @@ pub const Node = union(enum) {
                     statement.destroy(allocator);
                 }
                 self.while_statement.statement_list.deinit(allocator);
+                allocator.destroy(self);
+                return;
+            },
+            .for_statement => {
+                self.for_statement.decleration.destroy(allocator);
+                self.for_statement.condition.destroy(allocator);
+                self.for_statement.statement.destroy(allocator);
+                for (self.for_statement.statement_list.items) |statement| {
+                    statement.destroy(allocator);
+                }
+                self.for_statement.statement_list.deinit(allocator);
                 allocator.destroy(self);
                 return;
             },
@@ -751,6 +783,36 @@ pub const Node = union(enum) {
                 std.debug.print("body:\n", .{});
                 for (self.while_statement.statement_list.items, 0..) |stmt, i| {
                     const is_last = (i == self.while_statement.statement_list.items.len - 1);
+                    printBranch(indent + 1, is_last);
+                    stmt.printWithContext(indent + 2, is_last);
+                }
+            },
+            .for_statement => {
+                std.debug.print("While\n", .{});
+                
+                // Declaration 
+                printBranch(indent, false);
+                std.debug.print("declaration:\n", .{});
+                printBranch(indent + 1, true);
+                self.for_statement.declaration.printWithContext(indent + 2, true);
+
+                // Condition
+                printBranch(indent, false);
+                std.debug.print("condition:\n", .{});
+                printBranch(indent + 1, true);
+                self.for_statement.condition.printWithContext(indent + 2, true);
+                
+                // Expression`
+                printBranch(indent, false);
+                std.debug.print("expression:\n", .{});
+                printBranch(indent + 1, true);
+                self.for_statement.expression.printWithContext(indent + 2, true);
+                
+                // Body
+                printBranch(indent, true);
+                std.debug.print("body:\n", .{});
+                for (self.for_statement.statement_list.items, 0..) |stmt, i| {
+                    const is_last = (i == self.for_statement.statement_list.items.len - 1);
                     printBranch(indent + 1, is_last);
                     stmt.printWithContext(indent + 2, is_last);
                 }

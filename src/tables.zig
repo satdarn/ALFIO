@@ -194,6 +194,14 @@ fn check_for_variable_decleration(allocator: std.mem.Allocator, symbol_table: *G
                 try check_for_variable_decleration(allocator, symbol_table, function_table, stmt);
             }
         },
+        .for_statement => {
+            try check_for_variable_decleration(allocator, symbol_table, function_table, statement.for_statement.decleration);
+            try check_for_variable_decleration(allocator, symbol_table, function_table, statement.for_statement.statement);
+
+            for (statement.for_statement.statement_list.items) |stmt| {
+                try check_for_variable_decleration(allocator, symbol_table, function_table, stmt);
+            }
+        },
         .else_statement => {
             for (statement.else_statement.statement_list.items) |stmt| {
                 try check_for_variable_decleration(allocator, symbol_table, function_table, stmt);

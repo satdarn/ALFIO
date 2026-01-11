@@ -2,7 +2,7 @@ const std = @import("std");
 const InputStream = @import("stream.zig").InputStream;
 
 const type_keywords = [_][]const u8{ "int", "void", "bool", "char", "word" };
-const keywords = [_][]const u8{ "break", "fn", "print", "byte_in", "byte_out", "syscall", "return", "if", "else", "while" };
+const keywords = [_][]const u8{ "break", "fn","syscall", "return", "if", "else", "while", "for" };
 pub const BaseTypes = enum {
     void,
     bool,
@@ -339,7 +339,7 @@ pub fn tokenize(allocator: std.mem.Allocator, stream: *InputStream) !TokenList {
             _ = stream.consume();
             continue;
         }
-        if (std.ascii.isAlphabetic(stream.current_char())) {
+        if (std.ascii.isAlphabetic(stream.current_char()) or stream.current_char() == '_') {
             const start = stream.pos;
             while (std.ascii.isAlphabetic(stream.current_char()) or stream.current_char() == '_') _ = stream.consume();
             const ident_copy = try allocator.dupe(u8, stream.get_substring(start, stream.pos));

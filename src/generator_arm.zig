@@ -349,9 +349,12 @@ fn generate_while(allocator: std.mem.Allocator, generator: *Generator, statement
 
 fn generate_return(allocator: std.mem.Allocator, generator: *Generator, statement: *Node) !void {
     var buffer: [256]u8 = undefined;
-    const result_register = try evaluate_expression(allocator, generator, statement.return_statement.expression);
-    try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, "     mov x0, {s}\n     mov sp, x29\n     ldp x29, x30, [sp], #16\n     ret\n", .{result_register}));
+    if (statement.return_statement.expression)  |return_statement| {
+    const result_register = try evaluate_expression(allocator, generator, return_statement);
+    try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, "     mov x0, {s}\n", .{result_register}));
     generator.scratch_allocator.scratch_free_by_name(result_register);
+    }
+    try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, "     mov sp, x29\n     ldp x29, x30, [sp], #16\n     ret\n", .{}));
 }
 
 fn evaluate_expression(allocator: std.mem.Allocator, generator: *Generator, expression: *Node) GeneratorError![]const u8 {

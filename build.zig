@@ -14,6 +14,15 @@ pub fn build(b: *std.Build) void {
         .os_tag = .linux,
         .abi = .gnu,
     });
+    
+    const build_stdlib = b.addExecutable(.{
+        .name = "build_stdlib",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/build_stdlib.zig"),
+            .target = x86_64_target,
+        }),
+    });
+    const run_build_stdlib = b.addRunArtifact(build_stdlib);
 
     // Build x86_64 binary
     const x86_exe = b.addExecutable(.{
@@ -23,6 +32,8 @@ pub fn build(b: *std.Build) void {
             .target = x86_64_target,
         }),
     });
+
+    x86_exe.step.dependOn(&run_build_stdlib.step);
     b.installArtifact(x86_exe);
 
     // Build ARM64 binary

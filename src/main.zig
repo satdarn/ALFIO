@@ -1,4 +1,5 @@
 const std = @import("std");
+const stdlib = @import("stdlib_generated.zig");
 const builtin = @import("builtin");
 const InputStream = @import("stream.zig").InputStream;
 const tokenize = @import("lexer.zig").tokenize;
@@ -12,6 +13,7 @@ const analyize_arm = @import("analysis_arm.zig").analyize;
 const generate_code_arm = @import("generator_arm.zig").generate_code;
 const saveAndCompileAssembly_arm = @import("generator_arm.zig").saveAndCompileAssembly;
 
+const stdlib_source = @embedFile("stdlib.aio");
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -32,6 +34,7 @@ pub fn main() !void {
     // Parse optional arguments
     var target_arch: ?std.Target.Cpu.Arch = null;
     var output_name: []const u8 = "main";
+    var include_stdlib = true;
 
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--arch")) {
@@ -56,6 +59,8 @@ pub fn main() !void {
                 std.debug.print("-o requires an argument\n", .{});
                 return error.MissingOutputArgument;
             }
+        } else if (std.mem.eql(u8, arg, "--no-stdlib")) {
+            include_stdlib = false;
         } else {
             std.debug.print("Unknown option: {s}\n", .{arg});
             return error.UnknownOption;
@@ -68,6 +73,7 @@ pub fn main() !void {
     std.debug.print("Compiling for architecture: {s}\n", .{@tagName(arch)});
     std.debug.print("Output binary: {s}\n", .{output_name});
 
+    // Read user source file
     var stream = try InputStream.fromFile(allocator, file_path);
     defer stream.deinit(allocator);
 
@@ -91,10 +97,17 @@ pub fn main() !void {
             try type_checking(symbol_table, ast);
 
             // symbol_table.print_tables();
-            const assembly = try generate_code_x86(allocator, ast, symbol_table);
+            const assembly = try generate_code_x86(allocator, ast, symbol_table, false);
             defer allocator.free(assembly);
+            var combined_assembly: []u8= undefined;
+            if (include_stdlib) {
+                combined_assembly = try std.fmt.allocPrint(allocator, "{s}", .{assembly });
+            } else {
+                combined_assembly = try allocator.dupe(u8, assembly);
+            }
+            defer allocator.free(combined_assembly);
 
-            try saveAndCompileAssembly_x86(allocator, assembly, output_name, false);
+            try saveAndCompileAssembly_x86(allocator, combined_assembly, output_name, false);
             std.debug.print("Compilation successful! Binary: ./{s}\n", .{output_name});
         },
         .aarch64, .aarch64_be => {

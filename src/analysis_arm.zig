@@ -246,8 +246,9 @@ fn type_checking_pass(symbol_table: *GlobalTable, function_table: *FunctionTable
     }
 }
 
-fn evaluate_expression_type(global_table: *GlobalTable, function_table: *FunctionTable, expression: *Node) Types {
+fn evaluate_expression_type(global_table: *GlobalTable, function_table: *FunctionTable, expression_opt: ?*Node) Types {
     var _type: Types = .void;
+    const expression = if (expression_opt) |expr| expr else return .void;
     if (expression.* == .integer_literal) return min_literal_size(expression.integer_literal.value);
     if (expression.* == .character_literal) return Types.char;
     if (expression.* == .string_literal) return .{ .char_array = expression.string_literal.value.len - 1 };

@@ -1,100 +1,114 @@
-# ALFIO: The Arithmetic Integer Operations Language
+# ALFIO Language Documentation
+**A Lightweight Compiled Systems Language for Integer Operations**
 
-## What is this? (Seriously, I'm asking)
+## Overview 
 
-Its a compiled language with statically typed variables, simple byte based input output, bare minimum control flow, and a lack of dynamic memory allocation.
+Alfio is a minimal, compiled systems programming language targeting simple math operations. It is a highly unoptimized compiler with a small stdlib written in Alfio. 
+Alfio is in a pre-alpha with loose support for x86_64 unix like systems, in other words it follows the system V abi and generates x86_64. There is the start of an aarch65 implementation but that has not been kept instep with the main feature set of the x86 compiler. 
 
-Imagine if C and a calculator had a weird, minimalist baby that only speaks in integers and single characters. That's ALFIO. It's not quite a "real" programming language, but it *thinks* it is, and honestly, that's half the charm.
+### Design Philosophy 
 
-## Features (We Use That Word Loosely)
+- the programmer is never wrong...
+- less is more, lesser is more-er
+- if you know what a syscall is, you can call it. 
+- typed pointers are for nerds.
+- type casting is good... manual pointer math is more gooder.
+- structs are just byte arrays with math and casting
+- if you need dynamic allocation, roll your own malloc...
 
-### What It *Can* Do:
-- **Math!** Like, actual arithmetic! (Unless you try to divide by zero, then it gets sad)
-- **Print numbers!** (Only numbers though, don't ask it to print your feelings)
-- **Read/write characters!** (One at a time, because we're nostalgic for 1970s terminals)
-- **Strings... Kinda** (They are null terminated character arrays, because if its good enough for C)
-- **Functions!** (They're like little minions that do your bidding, dont ask if they can take strings as args)
-- **Loops!** (For when you really want to do the same wrong thing multiple times)
-- **If statements!** (Because I'm not trusting you with gotos)
+## Installation 
 
-### What It *Can't* Do:
-- Floating point math (decimals are for people with standards)
-- Dynamic memory (malloc who? Never met her)
-- Pointers (too scary)
-- Strings longer than what fits in your predetermined array
-- Any form of debugging support (c'mon, where's the fun in that?)
-- Make your compiler design professor proud
+### Quick Installation 
 
+Requirements: zig 0.15, gcc (for linking)
 
-## Installation Steps 
-Download the pre-compiled binary from a release and add it to your path
-
-If your brave enough, you can build it from source 
-
-Prerequisites 
-You'll need:
-1. **Zig compiler** (v0.15.0 or later) if you plan to build from source
-   - If you don't have it: `sudo apt install zig` (Ubuntu-ish)
-   - Or download from https://ziglang.org/download/
-
-2. **A C compiler or x86/aarch64 assembler** specifically GCC 
-
-```
-git clone https://github.com/satdarn/ALFIO.git
-cd ALPHIO
-zig build main.zig
-mv zig-bin/bin/alc $YOUR_PATH$
+``` bash
+git clone https://github.com/satdarn/ALFIO
+cd ALFIO
+zig build
+# Optional: move ./zig-out/bin/alc-x86_64 to path 
 ```
 
-## Usage 
+## Quick start 
+``` alfio 
+# The entry point for all programs is the main function
+fn main(): void { 
+    int n = 10; 
 
-### Step 1: Realize What You're Getting Into
-Are you sure? Like, *really* sure? This isn't Python. This isn't even C.
+    # print is a stdlib function which accepts an integer and prints it to stdout with a new line
+    print(n);
 
-### Step 2: Write Some "Code"
-```c
-# This is a comment. ALFIO supports comments! 
-# See? We're practically a modern language.
+    # words are just 64 bit integers, we treat it as a pointer...
+    word ptr_n = &n;
 
-fn main() : void {
-    int x = 5;  # Wow, a variable!
-    int y = 10; # Another one! We're on fire!
-    
-    if (x < y) {
-        print(x + y);  # Prints 15! Mind. Blown.
-    }
+    # but it lacks any type information about what it points to, much like a null pointer 
+    # so you need to always type cast during a dereference
+    print(*(int)ptr_n);
+
+    # this is a byte array, in this case we set it to a null terminated string
+	char[14] msg = "Hello World!\n"; # 13 chars + null terminator = 14
+   	
+	# print_string takes a word that points to a null terminated string of bytes and prints it to stdout
+	print_string(&msg);
 }
 ```
 
-### Step 3: Try to Compile It
-``` bash
-$ aic my_program.aio
+Compile and run: 
+
+```bash 
+alc-x86_64 main.aio -o main 
+./main
+10
+10
+Hello World!
+
 ```
-you should get either a series of confusing runtime errors from zig.. or some select hand crafted compilier errors from my twisted mind 
 
-### Step 4: Question Your Life Choices
+## Language reference
 
-"Why am I using a language that doesn't even have for loops?"
-"Wait, why did I make this?"
-"Is this even useful?"
+### Types:
 
-### Step 5: Keep Going Anyway
-Because at this point, you're invested, thier 
+- void: this is for return types only more or less, other than that its just going to give you compiler headaches 
+- bool: 8 bit unsigned integer, treated as false when 0, and true otherwise
+- char: 8 bit unsigned integer 
+- char[n]: char array of size n 
+- int: 32 bit signed integer 
+- word: 64 bit unsigned integer 
 
-### "Documentation" (I Wrote Some Things Down)
+Thats it :)
 
-The Type System™ (It's Basically Binary)
+## STDLIB
 
-int: Stores numbers. Like, all the numbers (up to 2^64-1 anyway)
+The compiler embeds the Alfio standard library (stdlib.aio) at build time. During compilation (using Zig's comptime), the stdlib is compiled to an object file and embedded into the binary. Changes to the stdlib source require a full recompile of the compiler.
 
-char: A single character. One. Uno. Singular.
+Purpose: Provide basic I/O, memory, and string operations
+Note: All functions use raw syscalls and manual memory management
 
-char[N]: N characters. That's it. No resizing. Deal with it.
+```alfio
+exit(err_code: int): void
+open(file_name: word, flags: int, mode: word): int 
+close(fd: int): void 
+write(fd: int, buf: word, count: int): void
+read(fd: int, buf: word, count: int): word
+mmap(addr: word, length: word, prot: int, flags: int, fd: int, offset: word): word
+munmap(addr: word, length: word): word
+byte_out(out: char): void
+byte_in(): char
+read_line(buffer: word, max_len: int): int
+strlen(s: word): int
+strcmp(sa: word, sb: word): int
+strcpy(dest: word, src: word): void
+memcpy(dest: word, src: word, n: int): void
+memset(dest: word, value: char, n: int): void
+memeql(a: word, b: word, n: int): bool
+print(num: int): void
+print_int(n: int): void
+print_hex(n: int): void
+print_string(str: word): void
+is_digit(c: char): bool
+ascii_to_integer(str: word): int
+integer_to_ascii(n: int, buffer: word, base: int): word
+reverse(buff: word, count: int): void
+exp(base: int, power: int): int
+```
 
-### Syntax Highlights (Lowlights?)
-
-Everything needs semicolons. EVERYTHING.
-
-Curly braces are mandatory. Your high school English teacher would approve.
-
-Functions must declare return types, even if it's void

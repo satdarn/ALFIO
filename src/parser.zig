@@ -310,6 +310,9 @@ fn parse_statement(parser: *Parser) ?*Node {
     if (parse_while_statement(parser)) |while_statement| {
         return while_statement;
     }
+    if (parse_for_statement(parser)) |for_statement| {
+        return for_statement;
+    }
     if (parse_function_call_statement(parser)) |function_call_statement| {
         return function_call_statement;
     }
@@ -401,10 +404,7 @@ fn parse_byte_in_statement(parser: *Parser) ?*Node {
 }
 fn parse_return_statement(parser: *Parser) ?*Node {
     if (!parser.consumeIfKeyword("return")) return null;
-    const expr = parse_expression(parser) orelse {
-        parser.fail("Expected expression after 'return'", .{});
-        return null;
-    };
+    const expr = parse_expression(parser);
     if (!parser.expectChar(';')) return null;
     return Node.create_return_node(
         parser.allocator,
@@ -412,7 +412,7 @@ fn parse_return_statement(parser: *Parser) ?*Node {
         parser.line,
     ) catch {
         parser.fail("Out of memory", .{});
-        expr.destroy(parser.allocator);
+        if (expr) |expression| expression.destroy(parser.allocator);
         return null;
     };
 }
@@ -550,6 +550,59 @@ fn parse_while_statement(parser: *Parser) ?*Node {
         return null;
     }
     return while_statement_node;
+}
+
+fn parse_for_statement(parser: *Parser) ?*Node {
+    if (!parser.consumeIfKeyword("for")) return null;
+    if (!parser.expectChar('(')) return null;
+    const decl = parse_decleration(parser) orelse {
+        parser.fail("Expected decleration after 'for('", .{});
+        return null;
+    };
+    const cond = parse_expression(parser) orelse {
+        parser.fail("Expected condtion after 'for(decl; ' ", .{});
+        return null;
+    };
+    if (!parser.expectChar(';')) return null;
+    const ass = parse_assignment(parser) orelse {
+        parser.fail("Expected assignment after 'for(decl; cond;' ", .{});
+        return null;
+    };
+    if (!parser.expectChar(')')) return null;
+    if (!parser.expectChar('{')) return null;
+
+    const for_statement_node = Node.create_for_node(
+        parser.allocator,
+        decl,
+        cond,
+        ass,
+        parser.line,
+    ) catch {
+        parser.fail("Out of memory", .{});
+        return null;
+    };
+
+    while (!parser.token_list.isPeekChar('}') and parser.ok()) {
+        const statement = parse_statement(parser);
+        if (statement) |stmt| {
+            for_statement_node.for_statement.statement_list.append(
+                parser.allocator,
+                stmt,
+            ) catch {
+                parser.fail("Failed to add statement to for statement", .{});
+                break;
+            };
+        } else if (parser.ok()) {
+            parser.fail("Expected statement or }}", .{});
+            break;
+        }
+    }
+
+    if (!parser.expectChar('}')) {
+        for_statement_node.destroy(parser.allocator);
+        return null;
+    }
+    return for_statement_node;
 }
 fn parse_deref_assignment(parser: *Parser) ?*Node {
     if (!parser.consumeIfChar('*')) return null;

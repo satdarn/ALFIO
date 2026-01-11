@@ -4,6 +4,7 @@ const GlobalTable = @import("tables.zig").GlobalTable;
 const FunctionTable = @import("tables.zig").FunctionTable;
 const Types = @import("lexer.zig").Types;
 const evaluate_expression_type = @import("analysis.zig").evaluate_expression_type;
+const stdlib_pregen = @import("stdlib_generated.zig").stdlib_assembly_x86_64;
 const GeneratorError = error{
     OutOfMemory,
     NoSpaceLeft,
@@ -22,10 +23,10 @@ const Generator = struct {
     label_count: *u32,
     loop_stack: std.ArrayList(LoopContext),
 };
-pub fn generate_code(allocator: std.mem.Allocator, ast: *Node, global_table: *GlobalTable) ![]const u8 {
+pub fn generate_code(allocator: std.mem.Allocator, ast: *Node, global_table: *GlobalTable, is_stdlib: bool) ![]const u8 {
     var output = try (std.ArrayList(u8)).initCapacity(allocator, 100);
     defer output.deinit(allocator);
-    try generate_prolog(allocator, &output);
+    try generate_prolog(allocator, &output, global_table, is_stdlib);
     if (ast.* == .program) {
         var label_count: u32 = 0;
         for (ast.program.items) |node| {
@@ -81,7 +82,6 @@ fn lower_32_reg(reg: []const u8) []const u8 {
 
     return map.get(reg) orelse reg;
 }
-
 
 // Convert 64-bit register name to its 8-bit lower version
 fn lower_8_reg(reg: []const u8) []const u8 {
@@ -175,7 +175,7 @@ const ScratchRegisters = struct {
                 return register;
             }
         }
-        return null;
+        unreachable;
     }
 
     pub fn alloc_for_func_call(self: *ScratchRegisters) void {
@@ -229,16 +229,22 @@ const ScratchRegisters = struct {
     }
 };
 
-fn generate_prolog(allocator: std.mem.Allocator, output: *std.ArrayList(u8)) !void {
-    const prolog =
+fn generate_prolog(allocator: std.mem.Allocator, output: *std.ArrayList(u8), global_table: *GlobalTable, is_stdlib: bool) !void {
+    var buffer: [256]u8 = undefined;
+    const prolog = if (!is_stdlib)
         \\.intel_syntax noprefix
-        \\.section .rodata
-        \\fmt_int:
-        \\      .string "%ld\n"
         \\.text
         \\.globl main
-        \\.extern printf
+    else
+        \\.intel_syntax noprefix
+        \\.text
     ;
+    if (is_stdlib) {
+        var iter = global_table.table.keyIterator();
+        while (iter.next()) |name| {
+            try output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, ".global {s}\n", .{name.*}));
+        }
+    }
     try output.appendSlice(allocator, prolog);
     try output.append(allocator, '\n');
 }
@@ -252,7 +258,6 @@ fn generate_function_prolog(allocator: std.mem.Allocator, generator: *Generator,
         \\     mov rbp, rsp
         \\     sub rsp, {d}
     ;
-
     try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, prolog, .{ function.function_def.name, generator.current_function_table.frame_size }));
     try generator.output.append(allocator, '\n');
     if (function.function_def.parameters.items.len > 5) {
@@ -297,6 +302,7 @@ fn generate_statement(allocator: std.mem.Allocator, generator: *Generator, node:
         .byte_out_statement => try generator_byte_out_statement(allocator, generator, node),
         .if_statement => try generate_if(allocator, generator, node),
         .while_statement => try generate_while(allocator, generator, node),
+        .for_statement => try generate_for(allocator, generator, node),
         .return_statement => try generate_return(allocator, generator, node),
         .break_statement => try generate_break(allocator, generator),
         else => {},
@@ -537,45 +543,67 @@ fn generate_while(allocator: std.mem.Allocator, generator: *Generator, statement
     const end = generator.label_count.*;
     var buffer: [66]u8 = undefined;
     try generator.loop_stack.append(allocator, .{ .start = start, .end = end });
-    try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, ".L_WHILE{d}:\n", .{start}));
+    try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, ".L_LOOP{d}:\n", .{start}));
     const result_register = try evaluate_expression(allocator, generator, statement.while_statement.expression, Types.Bool);
-    try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, "     cmp {s}, 0\n     je .L_WHILE{d}\n", .{ result_register, end }));
+    try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, "     cmp {s}, 0\n     je .L_LOOP{d}\n", .{ result_register, end }));
     generator.scratch_allocator.scratch_free_by_name(result_register);
     for (statement.while_statement.statement_list.items) |node| {
         try generate_statement(allocator, generator, node);
     }
-    try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, "     jmp .L_WHILE{d}\n", .{start}));
-    try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, ".L_WHILE{d}:\n", .{end}));
+    try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, "     jmp .L_LOOP{d}\n", .{start}));
+    try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, ".L_LOOP{d}:\n", .{end}));
+    _ = generator.loop_stack.pop();
+}
+fn generate_for(allocator: std.mem.Allocator, generator: *Generator, statement: *Node) !void {
+    generator.label_count.* += 1;
+    const start = generator.label_count.*;
+    generator.label_count.* += 1;
+    const end = generator.label_count.*;
+    var buffer: [66]u8 = undefined;
+    try generate_decleration(allocator, generator, statement.for_statement.decleration);
+    try generator.loop_stack.append(allocator, .{ .start = start, .end = end });
+    try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, ".L_LOOP{d}:\n", .{start}));
+    const result_register = try evaluate_expression(allocator, generator, statement.for_statement.condition, Types.Bool);
+    try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, "     cmp {s}, 0\n     je .L_LOOP{d}\n", .{ result_register, end }));
+    generator.scratch_allocator.scratch_free_by_name(result_register);
+    for (statement.for_statement.statement_list.items) |node| {
+        try generate_statement(allocator, generator, node);
+    }
+    try generate_statement(allocator, generator, statement.for_statement.statement);
+    try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, "     jmp .L_LOOP{d}\n", .{start}));
+    try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, ".L_LOOP{d}:\n", .{end}));
     _ = generator.loop_stack.pop();
 }
 
 fn generate_return(allocator: std.mem.Allocator, generator: *Generator, statement: *Node) !void {
     var buffer: [1024]u8 = undefined;
-    const result_register = upper_64_reg(try evaluate_expression(allocator, generator, statement.return_statement.expression, generator.current_function_table.return_type));
-    switch (generator.current_function_table.return_type) {
-        .bool => {
-            try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, "     movzx rax, {s}\n", .{lower_8_reg(result_register)}));
-        },
-        .char => {
-            try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, "     movzx rax, {s}\n", .{lower_8_reg(result_register)}));
-        },
-        .int => {
-            try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, "     movsxd rax, {s}\n", .{lower_32_reg(result_register)}));
-        },
-        .word => {
-            try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, "     mov rax, {s}\n", .{result_register}));
-        },
-        else => unreachable,
+    if (statement.return_statement.expression) |return_statement| {
+        const result_register = upper_64_reg(try evaluate_expression(allocator, generator, return_statement, generator.current_function_table.return_type));
+        switch (generator.current_function_table.return_type) {
+            .bool => {
+                try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, "     movzx rax, {s}\n", .{lower_8_reg(result_register)}));
+            },
+            .char => {
+                try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, "     movzx rax, {s}\n", .{lower_8_reg(result_register)}));
+            },
+            .int => {
+                try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, "     movsxd rax, {s}\n", .{lower_32_reg(result_register)}));
+            },
+            .word => {
+                try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, "     mov rax, {s}\n", .{result_register}));
+            },
+            else => unreachable,
+        }
+        generator.scratch_allocator.scratch_free_by_name(result_register);
     }
     try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, "     mov rsp, rbp\n     pop rbp\n     ret\n", .{}));
-    generator.scratch_allocator.scratch_free_by_name(result_register);
 }
 
 fn generate_break(allocator: std.mem.Allocator, generator: *Generator) !void {
     if (generator.loop_stack.items.len == 0) unreachable;
     const current_loop = generator.loop_stack.getLast();
     var buffer: [1024]u8 = undefined;
-    try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, "     jmp .L_WHILE{d}\n", .{current_loop.end}));
+    try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, "     jmp .L_LOOP{d}\n", .{current_loop.end}));
 }
 
 fn evaluate_expression(allocator: std.mem.Allocator, generator: *Generator, expression: *Node, _type: Types) GeneratorError![]const u8 {
@@ -870,7 +898,7 @@ fn evaluate_binary(allocator: std.mem.Allocator, generator: *Generator, expressi
         .Or => {
             const or_asm =
                 \\     cmp {s}, 1
-                \\     je .L{d}
+                \\     je .L_OR{d}
                 \\     cmp {s}, 1
                 \\     je .L_OR{d}
                 \\     mov {s}, 0 
@@ -879,9 +907,9 @@ fn evaluate_binary(allocator: std.mem.Allocator, generator: *Generator, expressi
                 \\     mov {s}, 1
                 \\.L_OR{d}:
             ;
-            const false_lbl = generator.label_count.* + 1;
-            const end_lbl = generator.label_count.* + 1;
             generator.label_count.* += 2;
+            const false_lbl = generator.label_count.* - 1;
+            const end_lbl = generator.label_count.*;
             try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, or_asm, .{
                 left_target,
                 false_lbl,
@@ -1040,13 +1068,30 @@ pub fn saveAndCompileAssembly(allocator: std.mem.Allocator, code: []const u8, ou
     const file = try std.fs.cwd().createFile("main.s", .{});
     defer file.close();
     try file.writeAll(code);
-    const result = try std.process.Child.run(.{ .allocator = allocator, .argv = &[_][]const u8{ "gcc", "-no-pie", "main.s", "-o", output_name } });
-    std.debug.print("{s}", .{result.stdout});
-    std.debug.print("{s}", .{result.stderr});
+    const stdlib = try std.fs.cwd().createFile("stdlib.o", .{});
+    defer stdlib.close();
+    try stdlib.writeAll(stdlib_pregen);
+    const as_result = try std.process.Child.run(.{ .allocator = allocator, .argv = &[_][]const u8{ "as", "main.s", "-o", "main.o" } });
+    std.debug.print("{s}", .{as_result.stdout});
+    std.debug.print("{s}", .{as_result.stderr});
 
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
+    defer allocator.free(as_result.stdout);
+    defer allocator.free(as_result.stderr);
+    const ld_result = try std.process.Child.run(.{ .allocator = allocator, .argv = &[_][]const u8{
+        "gcc",
+        "main.o",
+        "stdlib.o",
+        "-o",
+        output_name,
+    } });
+    std.debug.print("{s}", .{ld_result.stdout});
+    std.debug.print("{s}", .{ld_result.stderr});
+
+    defer allocator.free(ld_result.stdout);
+    defer allocator.free(ld_result.stderr);
     if (clean_up_flag) std.fs.cwd().deleteFile("main.s") catch {};
+    if (clean_up_flag) std.fs.cwd().deleteFile("main.o") catch {};
+    std.fs.cwd().deleteFile("stdlib.o") catch {};
 }
 
 fn reg_from_type(reg: []const u8, _type: Types) []const u8 {

@@ -4,7 +4,7 @@ const Node = @import("nodes.zig").Node;
 const Types = @import("lexer.zig").Types;
 const GlobalTable = @import("tables.zig").GlobalTable;
 const FunctionTable = @import("tables.zig").FunctionTable;
-
+const stdlib_functions = @import("stdlib_generated.zig").functions;
 pub const TypeError = error{
     TypeMismatch,
     InvalidOperation,
@@ -44,8 +44,10 @@ fn type_checking_pass(symbol_table: *GlobalTable, function_table: *FunctionTable
     switch (statement.*) {
         .decleration => |decl| {
             const lhs = try evaluate_expression_type(symbol_table, function_table, statement);
-            const rhs = try evaluate_expression_type(symbol_table, function_table, statement.decleration.expression.?);
-            if (!Types.eql(lhs, rhs)) return type_error(decl.line, "Type mismatch in declaration: expected {s}, got {s}", .{ lhs.to_string(&buff), rhs.to_string(&buff) });
+            if (statement.decleration.expression) |expr| {
+                const rhs = try evaluate_expression_type(symbol_table, function_table, expr);
+                if (!Types.eql(lhs, rhs)) return type_error(decl.line, "Type mismatch in declaration: expected {s}, got {s}", .{ lhs.to_string(&buff), rhs.to_string(&buff) });
+            }
         },
         .assignment => |assign| {
             const lhs = try evaluate_expression_type(symbol_table, function_table, statement.assignment.identifier);
@@ -95,7 +97,7 @@ pub fn evaluate_expression_type(global_table: *GlobalTable, function_table: *Fun
             _type = Types.Char;
         },
         .string_literal => {
-            _type = .{ .char_array = expression.string_literal.value.len };
+            _type = .{ .char_array = expression.string_literal.value.len + 1 };
         },
         .function_call => |call| {
             if (global_table.get_function(call.name)) |function| {
@@ -109,12 +111,39 @@ pub fn evaluate_expression_type(global_table: *GlobalTable, function_table: *Fun
                     const call_type = try evaluate_expression_type(global_table, function_table, call_expr);
                     if (!can_cast_to(call_type, param.type) and !can_cast_to(param.type, call_type)) {
                         const param_name = function.parameters.keys()[i];
-                        return type_error(call.line, "Function '{s}' parameter '{s}' expects type {s} but got {s}", .{ call.name, param_name, param.type.to_string(&buff), call_type.to_string(&buff) });
+                        return type_error(
+                            call.line,
+                            "Function '{s}' parameter '{s}' expects type {s} but got {s}",
+                            .{ call.name, param_name, param.type.to_string(&buff), call_type.to_string(&buff) },
+                        );
                     }
                 }
 
                 return function.return_type;
             } else {
+                for (stdlib_functions) |func| {
+                    if (std.mem.eql(u8, func.name, call.name)) {
+                        if (func.parameters.len != call.parameter_expressions.items.len) {
+                            return type_error(
+                                call.line,
+                                "Function '{s}' expects {d} arguments but got {d}",
+                                .{ call.name, func.parameters.len, call.parameter_expressions.items.len },
+                            );
+                        }
+                        for (call.parameter_expressions.items, func.parameters) |call_expr, param| {
+                            const call_type = try evaluate_expression_type(global_table, function_table, call_expr);
+                            if (!can_cast_to(call_type, param.type) and !can_cast_to(param.type, call_type)) {
+                                return type_error(
+                                    call.line,
+                                    "Function '{s}' parameter '{s}' expects type {s} but got {s}",
+                                    .{ call.name, param.name, param.type.to_string(&buff), call_type.to_string(&buff) },
+                                );
+                            }
+                        }
+                        return func.return_type;
+                    }
+                }
+
                 return type_error(call.line, "Undefined function: {s}", .{call.name});
             }
         },
