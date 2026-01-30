@@ -986,6 +986,30 @@ fn parse_expression(parser: *Parser) ?*Node {
                     parser.line,
                 ) catch null;
             }
+        }
+        if (parser.token_list.isPeekChar('&')) {
+            _ = parser.token_list.consume();
+            if (parse_expression(parser)) |expression| {
+                return Node.create_binary_op_node(
+                    parser.allocator,
+                    .bAnd,
+                    term,
+                    expression,
+                    parser.line,
+                ) catch null;
+            }
+        }
+        if (parser.token_list.isPeekChar('|')) {
+            _ = parser.token_list.consume();
+            if (parse_expression(parser)) |expression| {
+                return Node.create_binary_op_node(
+                    parser.allocator,
+                    .bOr,
+                    term,
+                    expression,
+                    parser.line,
+                ) catch null;
+            }
         } else {
             return term;
         }
@@ -1104,6 +1128,18 @@ fn parse_factor(parser: *Parser) ?*Node {
             return Node.create_unary_op_node(
                 parser.allocator,
                 .Not,
+                operand,
+                parser.line,
+            ) catch null;
+        }
+        return null;
+    }
+    if (parser.token_list.isPeekChar('~')) {
+        _ = parser.token_list.consume();
+        if (parse_factor(parser)) |operand| {
+            return Node.create_unary_op_node(
+                parser.allocator,
+                .bNeg,
                 operand,
                 parser.line,
             ) catch null;

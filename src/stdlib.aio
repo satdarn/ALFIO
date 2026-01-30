@@ -36,13 +36,13 @@ fn read(fd: int, buf: word, count: int): word {
 	return syscall(0, fd, buf, count);	
 }
 
-fn read_line(buffer: word, max_len: int) :int {
+fn read_line(fd: int, buffer: word, max_len: int) :int {
 	if ((buffer == 0) || (max_len < 1)) {
 		return -1;
 	}
     char ch = (char)0;
     for (int i = 0; i < (max_len - 1); i = i + 1;) {
-        if (read(0, &ch, 1) != 1) {
+        if (read(fd, &ch, 1) != 1) {
             break; 
         }
         byte_out(ch);
@@ -167,6 +167,7 @@ fn ascii_to_integer(str: word): int {
     
     return val;
 }
+
 fn integer_to_ascii(n: int, buffer: word, base: int): word {
 	int i = 0;
 	bool is_negative = (bool)0;
@@ -198,7 +199,6 @@ fn integer_to_ascii(n: int, buffer: word, base: int): word {
 	return buffer;
 }
 
-
 fn reverse(buff: word, count: int): void{
 	int start = 0;
 	int end = count - 1;
@@ -210,5 +210,135 @@ fn reverse(buff: word, count: int): void{
 		start = start + 1;
 		end = end - 1;
 	}
+}
+
+fn alloc_create(heap_size: word): word {
+	word ALLOC_STATE_SIZE = (word) 24;
+	word ALLOC_HEAP_OFF = (word)0;
+	word ALLOC_SIZE_OFF = (word)8;
+	word ALLOC_HEAD_OFF = (word)16;
+
+	word HEADER_SIZE = (word)24;
+	word SIZE_OFF = (word)0;
+	word FREE_OFF = (word)8;
+	word NEXT_OFF = (word)16;
+	word state = mmap(
+		0,
+		ALLOC_STATE_SIZE,
+		3, 
+		0x22,
+		-1,
+		0
+	);
+	if (state == 0) {
+		return 0;
+	}
+	word heap = mmap(
+		0,
+		heap_size,
+		3, 
+		0x22,
+		-1,
+		0
+	);
+
+	if (heap == 0) {
+		munmap(state, ALLOC_STATE_SIZE);
+		return 0;
+	}
+	
+	*(word)(state + ALLOC_HEAP_OFF) = heap;
+	*(word)(state + ALLOC_SIZE_OFF) = heap_size;
+	*(word)(state + ALLOC_HEAD_OFF) = heap;
+
+	*(word)(heap + SIZE_OFF) = heap_size - HEADER_SIZE;
+	*(char)(heap + FREE_OFF) = (char)1;
+	*(word)(heap + NEXT_OFF) = (word)0;
+}
+
+fn align(n: int, a: int): int {
+	return (n + a -1 ) & ~(a - 1);
+}
+
+fn alloc(state: word, size: int): word {
+	word ALLOC_STATE_SIZE = (word) 24;
+	word ALLOC_HEAP_OFF = (word)0;
+	word ALLOC_SIZE_OFF = (word)8;
+	word ALLOC_HEAD_OFF = (word)16;
+	word HEADER_SIZE = (word)24;
+	word SIZE_OFF = (word)0;
+	word FREE_OFF = (word)8;
+	word NEXT_OFF = (word)16;
+	if ((state == 0) || (state <= 0)) {
+		return 0;
+	}
+	size = align(size, 8);
+	word curr = *(word)(state + ALLOC_HEAP_OFF);
+	while(curr != 0){
+		bool free = (bool)*(char)(curr+FREE_OFF);
+		word curr_size = *(word)(curr + SIZE_OFF);
+		if (free && (curr_size >= size)) {
+			word remaining = curr_size - size;
+			if (remaining >=  HEADER_SIZE + 8) {
+				word new_block  = curr + HEADER_SIZE + size;
+				*(word)(new_block+SIZE_OFF) = remaining - HEADER_SIZE;
+				*(char)(new_block+FREE_OFF) = (char)1;
+				*(word)(new_block+NEXT_OFF) = *(word)(curr + NEXT_OFF);
+				*(word)(curr + NEXT_OFF) = new_block;
+                *(word)(curr + SIZE_OFF) = size;
+			}
+			*(char)(curr + FREE_OFF) = (char)0;
+            return curr + HEADER_SIZE;
+		}
+		curr = *(word)(curr + NEXT_OFF);
+	}
+	return 0;
+}
+fn free(state: word, ptr: word): void {
+	word ALLOC_STATE_SIZE = (word) 24;
+	word ALLOC_HEAP_OFF = (word)0;
+	word ALLOC_SIZE_OFF = (word)8;
+	word ALLOC_HEAD_OFF = (word)16;
+	word HEADER_SIZE = (word)24;
+	word SIZE_OFF = (word)0;
+	word FREE_OFF = (word)8;
+	word NEXT_OFF = (word)16;
+    if ((state == 0) || (ptr == 0)) {
+        return;
+    }
+
+    word block = ptr - HEADER_SIZE;
+    *(char)(block + FREE_OFF) = (char)1;
+
+    word next = *(word)(block + NEXT_OFF);
+    if ((next != 0) && (*(bool)(next + FREE_OFF))) {
+        *(word)(block + SIZE_OFF) =
+            *(word)(block + SIZE_OFF)
+            + HEADER_SIZE
+            + *(word)(next + SIZE_OFF);
+
+        *(word)(block + NEXT_OFF) =
+            *(word)(next + NEXT_OFF);
+    }
+}
+
+fn allocator_destroy(state: word): void {
+	word ALLOC_STATE_SIZE = (word) 24;
+	word ALLOC_HEAP_OFF = (word)0;
+	word ALLOC_SIZE_OFF = (word)8;
+	word ALLOC_HEAD_OFF = (word)16;
+	word HEADER_SIZE = (word)24;
+	word SIZE_OFF = (word)0;
+	word FREE_OFF = (word)8;
+	word NEXT_OFF = (word)16;
+    if (state == 0) {
+        return;
+    }
+    word heap = *(word)(state + ALLOC_HEAP_OFF);
+    word size = *(word)(state + ALLOC_SIZE_OFF);
+    if ((heap != 0) && (size > 0)) {
+        munmap(heap, size);
+    }
+    munmap(state, ALLOC_STATE_SIZE);
 }
 

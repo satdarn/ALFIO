@@ -40,23 +40,24 @@ pub fn type_checking(symbol_table: *GlobalTable, ast: *Node) !void {
 }
 
 fn type_checking_pass(symbol_table: *GlobalTable, function_table: *FunctionTable, statement: *Node) !void {
-    var buff: [64]u8 = undefined;
+    var buffA: [64]u8 = undefined;
+    var buffB: [64]u8 = undefined;
     switch (statement.*) {
         .decleration => |decl| {
             const lhs = try evaluate_expression_type(symbol_table, function_table, statement);
             if (statement.decleration.expression) |expr| {
                 const rhs = try evaluate_expression_type(symbol_table, function_table, expr);
-                if (!Types.eql(lhs, rhs)) return type_error(decl.line, "Type mismatch in declaration: expected {s}, got {s}", .{ lhs.to_string(&buff), rhs.to_string(&buff) });
+                if (!Types.eql(lhs, rhs)) return type_error(decl.line, "Type mismatch in declaration: expected {s}, got {s}", .{ lhs.to_string(&buffA), rhs.to_string(&buffB) });
             }
         },
         .assignment => |assign| {
             const lhs = try evaluate_expression_type(symbol_table, function_table, statement.assignment.identifier);
             const rhs = try evaluate_expression_type(symbol_table, function_table, statement.assignment.expression);
-            if (!Types.eql(lhs, rhs)) return type_error(assign.line, "Type mismatch assignment expected {s}, got {s}", .{ lhs.to_string(&buff), rhs.to_string(&buff) });
+            if (!Types.eql(lhs, rhs)) return type_error(assign.line, "Type mismatch assignment expected {s}, got {s}", .{ lhs.to_string(&buffA), rhs.to_string(&buffB) });
         },
         .if_statement => |if_stmt| {
             const condition = try evaluate_expression_type(symbol_table, function_table, statement.if_statement.expression);
-            if (!Types.eql(condition, Types.Bool)) return type_error(if_stmt.line, "If condition must be bool, got {s}", .{condition.to_string(&buff)});
+            if (!Types.eql(condition, Types.Bool)) return type_error(if_stmt.line, "If condition must be bool, got {s}", .{condition.to_string(&buffA)});
 
             for (statement.if_statement.statement_list.items) |stmt| try type_checking_pass(symbol_table, function_table, stmt);
             if (statement.if_statement.else_statement) |stmt| try type_checking_pass(symbol_table, function_table, stmt);
@@ -66,7 +67,7 @@ fn type_checking_pass(symbol_table: *GlobalTable, function_table: *FunctionTable
         },
         .while_statement => |while_stmt| {
             const condition = try evaluate_expression_type(symbol_table, function_table, statement.while_statement.expression);
-            if (!Types.eql(condition, Types.Bool)) return type_error(while_stmt.line, "While condition must be bool, got {s}", .{condition.to_string(&buff)});
+            if (!Types.eql(condition, Types.Bool)) return type_error(while_stmt.line, "While condition must be bool, got {s}", .{condition.to_string(&buffA)});
             for (statement.while_statement.statement_list.items) |stmt| try type_checking_pass(symbol_table, function_table, stmt);
         },
         else => {},
@@ -210,6 +211,9 @@ pub fn evaluate_expression_type(global_table: *GlobalTable, function_table: *Fun
                         return type_error(unop.line, "Logical NOT requires bool operand, got {s}", .{operand_type.to_string(&buff)});
                     }
                     return Types.Bool;
+                },
+                .bNeg => {
+                    return try evaluate_expression_type(global_table, function_table, unop.expression);
                 },
             }
         },

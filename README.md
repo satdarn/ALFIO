@@ -26,7 +26,7 @@ Requirements: zig 0.15, gcc (for linking)
 git clone https://github.com/satdarn/ALFIO
 cd ALFIO
 zig build
-# Optional: move ./zig-out/bin/alc-x86_64 to path 
+# Optional: move ./zig-out/bin/alc to path 
 ```
 
 ## Quick start 
@@ -110,5 +110,10 @@ ascii_to_integer(str: word): int
 integer_to_ascii(n: int, buffer: word, base: int): word
 reverse(buff: word, count: int): void
 exp(base: int, power: int): int
+alloc_create(heap_size: word): word 
+allocator_destroy(state: word): void 
+alloc(state: word, size: int): word 
+free(state: word, ptr: word): void
+align(n: int, a: int): int 
 ```
 

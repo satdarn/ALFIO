@@ -117,8 +117,8 @@ pub const Node = union(enum) {
         line: u32,
     },
 
-    pub const BinaryOpEnum = enum { Add, Sub, Mult, Div, Mod, Eql, Neq, Leq, Geq, Lt, Gt, And, Or };
-    pub const UnaryOpEnum = enum { AddrOf, Dref, Not, Neg };
+    pub const BinaryOpEnum = enum { Add, Sub, Mult, Div, Mod, Eql, Neq, Leq, Geq, Lt, Gt, And, Or, bAnd, bOr};
+    pub const UnaryOpEnum = enum { AddrOf, Dref, Not, Neg, bNeg};
     pub fn create_program_node(allocator: std.mem.Allocator) !*Node {
         const new_program_node = try allocator.create(Node);
         const program_list = try std.ArrayList(*Node).initCapacity(allocator, 10);
@@ -898,6 +898,8 @@ pub const Node = union(enum) {
             .Gt => ">",
             .And => "&&",
             .Or => "||",
+            .bAnd => "&",
+            .bOr => "|",
         };
     }
     fn unaryOpToString(op: UnaryOpEnum) []const u8 {
@@ -906,6 +908,7 @@ pub const Node = union(enum) {
             .Dref => "*",
             .Not => "!",
             .Neg => "-",
+            .bNeg => "~",
         };
     }
 };

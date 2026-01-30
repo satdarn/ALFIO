@@ -233,8 +233,18 @@ fn generate_prolog(allocator: std.mem.Allocator, output: *std.ArrayList(u8), glo
     var buffer: [256]u8 = undefined;
     const prolog = if (!is_stdlib)
         \\.intel_syntax noprefix
+        \\.global _start
         \\.text
-        \\.globl main
+        \\_start:
+        \\      xor rbp, rbp
+        \\      mov rdi, [rsp]           # argc
+        \\      lea rsi, [rsp + 8]       # argv
+        \\      and rsp, -16
+        \\      call main                # main(argc, argv, envp)
+        \\      mov edi, eax             # Move return value to exit argument (edi)
+        \\      mov eax, 60              # syscall number for exit (60 on x86-64)
+        \\      syscall                  # exit(main_return_value)
+        \\      hlt
     else
         \\.intel_syntax noprefix
         \\.text
@@ -755,7 +765,16 @@ fn evaluate_unary(allocator: std.mem.Allocator, generator: *Generator, expressio
                 return @tagName(target);
             }
         },
-        .Not => {},
+        .Not => {
+            const expr_reg = try evaluate_expression(allocator, generator, expression.unary_op.expression, Types.Word);
+            try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, "     not {s}\n", .{expr_reg}));
+            return expr_reg;
+        },
+        .bNeg => {
+            const expr_reg = try evaluate_expression(allocator, generator, expression.unary_op.expression, Types.Word);
+            try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, "     not {s}\n", .{expr_reg}));
+            return expr_reg;
+        },
         .Neg => {
             const expr_reg = try evaluate_expression(allocator, generator, expression.unary_op.expression, Types.Word);
             try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, "     neg {s}\n", .{expr_reg}));
@@ -923,6 +942,14 @@ fn evaluate_binary(allocator: std.mem.Allocator, generator: *Generator, expressi
             }));
             generator.scratch_allocator.scratch_free_by_name(right_target);
         },
+        .bAnd => {
+            try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, "     and {s}, {s}\n", .{ left_target, right_target }));
+            generator.scratch_allocator.scratch_free_by_name(right_target);
+        },
+        .bOr => {
+            try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, "     or {s}, {s}\n", .{ left_target, right_target }));
+            generator.scratch_allocator.scratch_free_by_name(right_target);
+        },
     }
     return left_target;
 }
@@ -1079,6 +1106,7 @@ pub fn saveAndCompileAssembly(allocator: std.mem.Allocator, code: []const u8, ou
     defer allocator.free(as_result.stderr);
     const ld_result = try std.process.Child.run(.{ .allocator = allocator, .argv = &[_][]const u8{
         "gcc",
+        "-nostartfiles",
         "main.o",
         "stdlib.o",
         "-o",

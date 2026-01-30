@@ -532,6 +532,7 @@ fn evaluate_expression(allocator: std.mem.Allocator, generator: *Generator, expr
             }));
             generator.scratch_allocator.scratch_free_by_name(right_target);
         },
+        else => unreachable,
     }
     return left_target;
 }
