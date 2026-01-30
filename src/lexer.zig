@@ -2,7 +2,7 @@ const std = @import("std");
 const InputStream = @import("stream.zig").InputStream;
 
 const type_keywords = [_][]const u8{ "int", "void", "bool", "char", "word" };
-const keywords = [_][]const u8{ "break", "fn","syscall", "return", "if", "else", "while", "for" };
+const keywords = [_][]const u8{ "break", "fn","syscall", "return", "if", "else", "while", "for", "const" };
 pub const BaseTypes = enum {
     void,
     bool,

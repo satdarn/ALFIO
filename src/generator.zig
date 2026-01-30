@@ -15,6 +15,11 @@ const LoopContext = struct {
     end: u32,
 };
 
+const StringLiteralEntry = struct {
+    label: []const u8,
+    value: []const u8,
+};
+
 const Generator = struct {
     output: *std.ArrayList(u8),
     symbol_table: *GlobalTable,
@@ -22,10 +27,19 @@ const Generator = struct {
     scratch_allocator: *ScratchRegisters,
     label_count: *u32,
     loop_stack: std.ArrayList(LoopContext),
+    string_literals: *std.ArrayList(StringLiteralEntry),
 };
 pub fn generate_code(allocator: std.mem.Allocator, ast: *Node, global_table: *GlobalTable, is_stdlib: bool) ![]const u8 {
     var output = try (std.ArrayList(u8)).initCapacity(allocator, 100);
     defer output.deinit(allocator);
+    var string_literals = try std.ArrayList(StringLiteralEntry).initCapacity(allocator, 10);
+    defer {
+        for (string_literals.items) |entry| {
+            allocator.free(entry.label);
+            allocator.free(entry.value);
+        }
+        string_literals.deinit(allocator);
+    }
     try generate_prolog(allocator, &output, global_table, is_stdlib);
     if (ast.* == .program) {
         var label_count: u32 = 0;
@@ -41,12 +55,19 @@ pub fn generate_code(allocator: std.mem.Allocator, ast: *Node, global_table: *Gl
                     .label_count = &label_count,
                     .scratch_allocator = &scratch_allocator,
                     .loop_stack = loop_stack,
+                    .string_literals = &string_literals,
                 };
                 try generate_function_prolog(allocator, &generator, node);
                 try implict_zero_init(allocator, &generator);
                 try generate_statements(allocator, &generator, node);
                 try generate_function_epilog(allocator, &generator);
             }
+        }
+    }
+    if (string_literals.items.len > 0) {
+        try output.appendSlice(allocator, "\n.section .rodata\n");
+        for (string_literals.items) |entry| {
+            try output.appendSlice(allocator, try std.fmt.allocPrint(allocator, "{s}:\n    .string \"{s}\"\n", .{entry.label, entry.value}));
         }
     }
 
@@ -308,13 +329,20 @@ fn generate_statement(allocator: std.mem.Allocator, generator: *Generator, node:
         .decleration => try generate_decleration(allocator, generator, node),
         .assignment => try generate_assignment(allocator, generator, node),
         .deref_assignment => try generate_deref_assignment(allocator, generator, node),
-        .print_statement => try generate_print(allocator, generator, node),
-        .byte_out_statement => try generator_byte_out_statement(allocator, generator, node),
         .if_statement => try generate_if(allocator, generator, node),
         .while_statement => try generate_while(allocator, generator, node),
         .for_statement => try generate_for(allocator, generator, node),
         .return_statement => try generate_return(allocator, generator, node),
         .break_statement => try generate_break(allocator, generator),
+        .const_decleration => |const_decl| {
+            // Store string literal for emission at end
+            if (const_decl.expression.* == .string_literal) {
+                const constant = generator.current_function_table.get_constant(const_decl.identifier) orelse unreachable;
+                const label = try allocator.dupe(u8, constant.value.string_label);
+                const value = try allocator.dupe(u8, const_decl.expression.string_literal.value);
+                try generator.string_literals.append(allocator, .{.label = label, .value = value});
+            }
+        },
         else => {},
     }
 }
@@ -485,39 +513,6 @@ fn generate_assignment(allocator: std.mem.Allocator, generator: *Generator, assi
     }
 }
 
-fn generate_print(allocator: std.mem.Allocator, generator: *Generator, statement: *Node) !void {
-    var buffer: [256]u8 = undefined;
-    const result_register = try evaluate_expression(allocator, generator, statement.print_statement.expression, Types.Word);
-    try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, "     mov rsi, {s}\n     lea rdi, [rip + fmt_int]\n     xor rax, rax\n     call printf\n", .{result_register}));
-    generator.scratch_allocator.scratch_free_by_name(result_register);
-}
-fn generator_byte_out_statement(allocator: std.mem.Allocator, generator: *Generator, statement: *Node) !void {
-    var buffer: [1024]u8 = undefined;
-
-    const result_register = try evaluate_expression(allocator, generator, statement.byte_out_statement.expression, Types.Char);
-
-    const byte_out_asm =
-        \\     push rax
-        \\     push rdi
-        \\     push rsi
-        \\     push rdx
-        \\     sub rsp, 8
-        \\     mov BYTE PTR [rsp], {s}
-        \\     mov rax, 1      # syscall: write
-        \\     mov rdi, 1      # fd: stdout
-        \\     mov rsi, rsp    # buf: pointer to our byte
-        \\     mov rdx, 1      # count: 1 byte
-        \\     syscall
-        \\     add rsp, 8
-        \\     pop rdx
-        \\     pop rsi
-        \\     pop rdi
-        \\     pop rax
-    ;
-    try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, byte_out_asm, .{lower_8_reg(result_register)}));
-    try generator.output.append(allocator, '\n');
-    generator.scratch_allocator.scratch_free_by_name(result_register);
-}
 
 fn generate_if(allocator: std.mem.Allocator, generator: *Generator, statement: *Node) !void {
     const false_lbl = generator.label_count.* + 1;
@@ -634,49 +629,6 @@ fn evaluate_expression(allocator: std.mem.Allocator, generator: *Generator, expr
         .identifier => {
             if (generator.scratch_allocator.scratch_alloc()) |target| {
                 return try load_variable_value_to_register(allocator, generator, expression.identifier.name, @tagName(target), Types.Word);
-            }
-        },
-        .byte_in_statement => {
-            if (generator.scratch_allocator.scratch_alloc()) |target| {
-                const byte_in_asm =
-                    \\     push rax
-                    \\     push rdi
-                    \\     push rsi
-                    \\     push rdx
-                    \\     sub rsp, 16          # Extra space for alignment + temp storage
-                    \\     mov rax, 0           # syscall: read
-                    \\     mov rdi, 0           # fd: stdin
-                    \\     lea rsi, [rsp + 8]   # buf: pointer to stack space
-                    \\     mov rdx, 1           # count: 1 byte
-                    \\     syscall
-                    \\     # Check if we read a byte
-                    \\     test rax, rax        # Check return value
-                    \\     jle .L_READEOF{}    # If <= 0, jump to EOF handling
-                    \\     mov {s}, BYTE PTR [rsp + 8]  # Success - get the byte
-                    \\     jmp .L_READDONE{}
-                    \\.L_READEOF{}:
-                    \\     xor {s}, {s}         # Return 0 on EOF/error
-                    \\.L_READDONE{}:
-                    \\     add rsp, 16
-                    \\     pop rdx
-                    \\     pop rsi
-                    \\     pop rdi
-                    \\     pop rax
-                ;
-                generator.label_count.* += 2;
-                const read_eof = generator.label_count.* - 1;
-                const read_done = generator.label_count.*;
-                try generator.output.appendSlice(allocator, try std.fmt.bufPrint(&buffer, byte_in_asm, .{
-                    read_eof,
-                    lower_8_reg(@tagName(target)),
-                    read_done,
-                    read_eof,
-                    lower_8_reg(@tagName(target)),
-                    lower_8_reg(@tagName(target)),
-                    read_done,
-                }));
-                try generator.output.append(allocator, '\n');
-                return reg_from_type(@tagName(target), _type);
             }
         },
         .array_index => {

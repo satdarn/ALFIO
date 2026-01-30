@@ -182,7 +182,9 @@ pub fn parse(allocator: std.mem.Allocator, token_list: *TokenList) !*Node {
     const program_node: *Node = try Node.create_program_node(allocator);
 
     while (token_list.current_token != null) {
-        if (parse_function_def(&parser)) |statement| {
+        if (parse_const_decleration(&parser)) |statement| {
+            try program_node.program.append(allocator, statement);
+        } else if (parse_function_def(&parser)) |statement| {
             try program_node.program.append(allocator, statement);
         } else if (!parser.ok()) {
             parser.fail("Expected function definition", .{});
@@ -289,14 +291,11 @@ fn parse_function_parameters(parser: *Parser) ?std.ArrayList(*Node) {
     return parameters;
 }
 fn parse_statement(parser: *Parser) ?*Node {
+    if (parse_const_decleration(parser)) |const_decleration| {
+        return const_decleration;
+    }
     if (parse_decleration(parser)) |decleration| {
         return decleration;
-    }
-    if (parse_print_statement(parser)) |print_statement| {
-        return print_statement;
-    }
-    if (parse_byte_out_statement(parser)) |byte_out_statement| {
-        return byte_out_statement;
     }
     if (parse_return_statement(parser)) |return_statement| {
         return return_statement;
@@ -348,22 +347,31 @@ fn parse_decleration(parser: *Parser) ?*Node {
         parser.line,
     ) catch {
         parser.fail("Out of memory", .{});
+        // Evaluate constant at compile time
         expr.?.destroy(parser.allocator);
         return null;
     };
 }
-fn parse_print_statement(parser: *Parser) ?*Node {
-    if (!parser.consumeIfKeyword("print")) return null;
-    if (!parser.expectChar('(')) return null;
+fn parse_const_decleration(parser: *Parser) ?*Node {
+    if (!parser.consumeIfKeyword("const")) return null;
+
+    const _type = parser.expectAnyTypeKeyword() orelse return null;
+    const ident = parser.expectAnyIdent() orelse return null;
+
+    if (!parser.expectChar('=')) return null;
+
     const expr = parse_expression(parser) orelse {
-        parser.fail("Expected expression after 'print('", .{});
+        parser.fail("Expected expression after '='", .{});
         return null;
     };
-    if (!parser.expectChar(')')) return null;
+
     if (!parser.expectChar(';')) return null;
-    return Node.create_print_node(
+
+    return Node.create_const_decl_node(
         parser.allocator,
+        ident,
         expr,
+        _type,
         parser.line,
     ) catch {
         parser.fail("Out of memory", .{});
@@ -371,37 +379,7 @@ fn parse_print_statement(parser: *Parser) ?*Node {
         return null;
     };
 }
-fn parse_byte_out_statement(parser: *Parser) ?*Node {
-    if (!parser.consumeIfKeyword("byte_out")) return null;
-    if (!parser.expectChar('(')) return null;
-    const expr = parse_expression(parser) orelse {
-        parser.fail("Expected expression after 'byte_out('", .{});
-        return null;
-    };
-    if (!parser.expectChar(')')) return null;
-    if (!parser.expectChar(';')) return null;
-    return Node.create_byte_out_node(
-        parser.allocator,
-        expr,
-        parser.line,
-    ) catch {
-        parser.fail("Out of memory", .{});
-        expr.destroy(parser.allocator);
-        return null;
-    };
-}
-fn parse_byte_in_statement(parser: *Parser) ?*Node {
-    if (!parser.consumeIfKeyword("byte_in")) return null;
-    if (!parser.expectChar('(')) return null;
-    if (!parser.expectChar(')')) return null;
-    return Node.create_byte_in_node(
-        parser.allocator,
-        parser.line,
-    ) catch {
-        parser.fail("Out of memory", .{});
-        return null;
-    };
-}
+
 fn parse_return_statement(parser: *Parser) ?*Node {
     if (!parser.consumeIfKeyword("return")) return null;
     const expr = parse_expression(parser);
@@ -1205,11 +1183,6 @@ fn parse_factor(parser: *Parser) ?*Node {
         }
     }
 
-    if (parser.token_list.isPeekKeyword("byte_in")) {
-        if (parse_byte_in_statement(parser)) |byte_in| {
-            return byte_in;
-        }
-    }
     if (parser.token_list.isPeekChar('(')) {
         _ = parser.token_list.consume();
         if (parser.token_list.peek()) |tok| {

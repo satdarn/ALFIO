@@ -1,3 +1,12 @@
+const word ALLOC_STATE_SIZE = (word) 24;
+const word ALLOC_HEAP_OFF = (word)0;
+const word ALLOC_SIZE_OFF = (word)8;
+const word ALLOC_HEAD_OFF = (word)16;
+const word HEADER_SIZE = (word)24;
+const word SIZE_OFF = (word)0;
+const word FREE_OFF = (word)8;
+const word NEXT_OFF = (word)16;
+
 fn exit(err_code: int): void {	
 	syscall(0x3c, err_code);
 }
@@ -213,15 +222,6 @@ fn reverse(buff: word, count: int): void{
 }
 
 fn alloc_create(heap_size: word): word {
-	word ALLOC_STATE_SIZE = (word) 24;
-	word ALLOC_HEAP_OFF = (word)0;
-	word ALLOC_SIZE_OFF = (word)8;
-	word ALLOC_HEAD_OFF = (word)16;
-
-	word HEADER_SIZE = (word)24;
-	word SIZE_OFF = (word)0;
-	word FREE_OFF = (word)8;
-	word NEXT_OFF = (word)16;
 	word state = mmap(
 		0,
 		ALLOC_STATE_SIZE,
@@ -261,14 +261,6 @@ fn align(n: int, a: int): int {
 }
 
 fn alloc(state: word, size: int): word {
-	word ALLOC_STATE_SIZE = (word) 24;
-	word ALLOC_HEAP_OFF = (word)0;
-	word ALLOC_SIZE_OFF = (word)8;
-	word ALLOC_HEAD_OFF = (word)16;
-	word HEADER_SIZE = (word)24;
-	word SIZE_OFF = (word)0;
-	word FREE_OFF = (word)8;
-	word NEXT_OFF = (word)16;
 	if ((state == 0) || (state <= 0)) {
 		return 0;
 	}
@@ -295,14 +287,6 @@ fn alloc(state: word, size: int): word {
 	return 0;
 }
 fn free(state: word, ptr: word): void {
-	word ALLOC_STATE_SIZE = (word) 24;
-	word ALLOC_HEAP_OFF = (word)0;
-	word ALLOC_SIZE_OFF = (word)8;
-	word ALLOC_HEAD_OFF = (word)16;
-	word HEADER_SIZE = (word)24;
-	word SIZE_OFF = (word)0;
-	word FREE_OFF = (word)8;
-	word NEXT_OFF = (word)16;
     if ((state == 0) || (ptr == 0)) {
         return;
     }
@@ -323,14 +307,6 @@ fn free(state: word, ptr: word): void {
 }
 
 fn allocator_destroy(state: word): void {
-	word ALLOC_STATE_SIZE = (word) 24;
-	word ALLOC_HEAP_OFF = (word)0;
-	word ALLOC_SIZE_OFF = (word)8;
-	word ALLOC_HEAD_OFF = (word)16;
-	word HEADER_SIZE = (word)24;
-	word SIZE_OFF = (word)0;
-	word FREE_OFF = (word)8;
-	word NEXT_OFF = (word)16;
     if (state == 0) {
         return;
     }

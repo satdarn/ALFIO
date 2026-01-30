@@ -82,7 +82,13 @@ pub fn evaluate_expression_type(global_table: *GlobalTable, function_table: *Fun
             _type = if (function_table.get_parameter_or_variable(expression.decleration.identifier)) |variable| variable.type else Types.Void;
         },
         .identifier => {
-            if (function_table.get_parameter_or_variable(expression.identifier.name)) |variable| {
+            if (function_table.get_constant(expression.identifier.name)) |constant| {
+                _type = constant.type;
+            }
+            else if (global_table.get_global_constant(expression.identifier.name)) |constant| {
+                _type = constant.type;
+            }
+            else if (function_table.get_parameter_or_variable(expression.identifier.name)) |variable| {
                 _type = variable.type;
             } else {
                 return type_error(expression.identifier.line, "Undefined variable: {s}", .{expression.identifier.name});
@@ -147,9 +153,6 @@ pub fn evaluate_expression_type(global_table: *GlobalTable, function_table: *Fun
 
                 return type_error(call.line, "Undefined function: {s}", .{call.name});
             }
-        },
-        .byte_in_statement => {
-            _type = Types.Char;
         },
         .binary_op => |binop| {
             const left_type = try evaluate_expression_type(global_table, function_table, binop.left);

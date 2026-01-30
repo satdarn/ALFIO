@@ -8,6 +8,12 @@ pub const Node = union(enum) {
         expression: ?*Node,
         line: u32,
     },
+    const_decleration: struct {
+        type: Types,
+        identifier: []const u8,
+        expression: *Node,
+        line: u32,
+    },
     assignment: struct {
         identifier: *Node,
         expression: *Node,
@@ -37,17 +43,6 @@ pub const Node = union(enum) {
     },
     syscall: struct {
         parameter_expressions: std.ArrayList(*Node),
-        line: u32,
-    },
-    print_statement: struct {
-        expression: *Node,
-        line: u32,
-    },
-    byte_in_statement: struct {
-        line: u32,
-    },
-    byte_out_statement: struct {
-        expression: *Node,
         line: u32,
     },
     return_statement: struct {
@@ -117,8 +112,8 @@ pub const Node = union(enum) {
         line: u32,
     },
 
-    pub const BinaryOpEnum = enum { Add, Sub, Mult, Div, Mod, Eql, Neq, Leq, Geq, Lt, Gt, And, Or, bAnd, bOr};
-    pub const UnaryOpEnum = enum { AddrOf, Dref, Not, Neg, bNeg};
+    pub const BinaryOpEnum = enum { Add, Sub, Mult, Div, Mod, Eql, Neq, Leq, Geq, Lt, Gt, And, Or, bAnd, bOr };
+    pub const UnaryOpEnum = enum { AddrOf, Dref, Not, Neg, bNeg };
     pub fn create_program_node(allocator: std.mem.Allocator) !*Node {
         const new_program_node = try allocator.create(Node);
         const program_list = try std.ArrayList(*Node).initCapacity(allocator, 10);
@@ -215,34 +210,18 @@ pub const Node = union(enum) {
         };
         return new_decl_node;
     }
-    pub fn create_print_node(allocator: std.mem.Allocator, expression: *Node, line: u32) !*Node {
-        const new_print_node = try allocator.create(Node);
-        new_print_node.* = .{
-            .print_statement = .{
+    pub fn create_const_decl_node(allocator: std.mem.Allocator, name: []const u8, expression: *Node, _type: Types, line: u32) !*Node {
+        const new_decl_node = try allocator.create(Node);
+        const name_copy = try allocator.dupe(u8, name);
+        new_decl_node.* = .{
+            .const_decleration = .{
+                .identifier = name_copy,
                 .expression = expression,
+                .type = _type,
                 .line = line,
             },
         };
-        return new_print_node;
-    }
-    pub fn create_byte_in_node(allocator: std.mem.Allocator, line: u32) !*Node {
-        const new_byte_in_node = try allocator.create(Node);
-        new_byte_in_node.* = .{
-            .byte_in_statement = .{
-                .line = line,
-            },
-        };
-        return new_byte_in_node;
-    }
-    pub fn create_byte_out_node(allocator: std.mem.Allocator, expression: *Node, line: u32) !*Node {
-        const new_byte_out_node = try allocator.create(Node);
-        new_byte_out_node.* = .{
-            .byte_out_statement = .{
-                .expression = expression,
-                .line = line,
-            },
-        };
-        return new_byte_out_node;
+        return new_decl_node;
     }
     pub fn create_return_node(allocator: std.mem.Allocator, expression: ?*Node, line: u32) !*Node {
         const new_return_node = try allocator.create(Node);
@@ -421,6 +400,12 @@ pub const Node = union(enum) {
                 allocator.destroy(self);
                 return;
             },
+            .const_decleration => {
+                allocator.free(self.const_decleration.identifier);
+                self.const_decleration.expression.destroy(allocator);
+                allocator.destroy(self);
+                return;
+            },
             .assignment => |ass| {
                 ass.identifier.destroy(allocator);
                 ass.expression.destroy(allocator);
@@ -464,20 +449,6 @@ pub const Node = union(enum) {
                     parameter_expression.destroy(allocator);
                 }
                 self.syscall.parameter_expressions.deinit(allocator);
-                allocator.destroy(self);
-                return;
-            },
-            .print_statement => {
-                self.print_statement.expression.destroy(allocator);
-                allocator.destroy(self);
-                return;
-            },
-            .byte_in_statement => {
-                allocator.destroy(self);
-                return;
-            },
-            .byte_out_statement => {
-                self.byte_out_statement.expression.destroy(allocator);
                 allocator.destroy(self);
                 return;
             },
@@ -629,6 +600,16 @@ pub const Node = union(enum) {
                     expr.printWithContext(indent + 2, true);
                 }
             },
+            .const_decleration => {
+                std.debug.print("Const Declaration: {s} : {s}\n", .{
+                    self.const_decleration.identifier,
+                    typeToString(self.const_decleration.type, &buffer),
+                });
+                printBranch(indent, true);
+                std.debug.print("value:\n", .{});
+                printBranch(indent + 1, true);
+                self.const_decleration.printWithContext(indent + 2, true);
+            },
 
             .assignment => {
                 std.debug.print("Assignment: \n", .{});
@@ -706,23 +687,6 @@ pub const Node = union(enum) {
                     }
                 }
             },
-
-            .print_statement => {
-                std.debug.print("Print\n", .{});
-                printBranch(indent, true);
-                self.print_statement.expression.printWithContext(indent + 1, true);
-            },
-
-            .byte_in_statement => {
-                std.debug.print("ByteIn()\n", .{});
-            },
-
-            .byte_out_statement => {
-                std.debug.print("ByteOut\n", .{});
-                printBranch(indent, true);
-                self.byte_out_statement.expression.printWithContext(indent + 1, true);
-            },
-
             .return_statement => {
                 std.debug.print("Return\n", .{});
                 printBranch(indent, true);
@@ -789,8 +753,8 @@ pub const Node = union(enum) {
             },
             .for_statement => {
                 std.debug.print("While\n", .{});
-                
-                // Declaration 
+
+                // Declaration
                 printBranch(indent, false);
                 std.debug.print("declaration:\n", .{});
                 printBranch(indent + 1, true);
@@ -801,13 +765,13 @@ pub const Node = union(enum) {
                 std.debug.print("condition:\n", .{});
                 printBranch(indent + 1, true);
                 self.for_statement.condition.printWithContext(indent + 2, true);
-                
+
                 // Expression`
                 printBranch(indent, false);
                 std.debug.print("expression:\n", .{});
                 printBranch(indent + 1, true);
                 self.for_statement.expression.printWithContext(indent + 2, true);
-                
+
                 // Body
                 printBranch(indent, true);
                 std.debug.print("body:\n", .{});

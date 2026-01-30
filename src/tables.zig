@@ -7,10 +7,18 @@ const VariableEntry = struct {
     type: Types,
     offset: i64,
 };
-
+const ConstantEntry = struct {
+    type: Types,
+    value: ConstantValue,
+};
+const ConstantValue = union(enum) {
+    int_value: i64,
+    string_label: []const u8,
+};
 pub const FunctionTable = struct {
     return_type: Types,
     parameters: std.StringArrayHashMap(VariableEntry),
+    constants: std.StringHashMap(ConstantEntry),
     variables: std.StringHashMap(VariableEntry),
     frame_size: i64 = 0,
 
@@ -18,6 +26,7 @@ pub const FunctionTable = struct {
         return .{
             .parameters = std.StringArrayHashMap(VariableEntry).init(allocator),
             .variables = std.StringHashMap(VariableEntry).init(allocator),
+            .constants = std.StringHashMap(ConstantEntry).init(allocator),
             .return_type = return_type,
         };
     }
@@ -33,6 +42,14 @@ pub const FunctionTable = struct {
             allocator.free(entry.key_ptr.*);
         }
         self.variables.deinit();
+        var const_iter = self.constants.iterator();
+        while (const_iter.next()) |entry| {
+            allocator.free(entry.key_ptr.*);
+            if (entry.value_ptr.value == .string_label) {
+                allocator.free(entry.value_ptr.value.string_label);
+            }
+        }
+        self.constants.deinit();
     }
 
     pub fn insert_new_parameter(self: *FunctionTable, allocator: std.mem.Allocator, name: []const u8, _type: Types) !void {
@@ -41,6 +58,14 @@ pub const FunctionTable = struct {
 
     pub fn insert_new_variable(self: *FunctionTable, allocator: std.mem.Allocator, name: []const u8, _type: Types) !void {
         try self.variables.put(try allocator.dupe(u8, name), .{ .type = _type, .offset = 0 });
+    }
+
+    pub fn insert_new_constant(self: *FunctionTable, allocator: std.mem.Allocator, name: []const u8, _type: Types, value: ConstantValue) !void {
+        try self.constants.put(try allocator.dupe(u8, name), .{ .type = _type, .value = value });
+    }
+
+    pub fn get_constant(self: *FunctionTable, name: []const u8) ?*ConstantEntry {
+        return self.constants.getPtr(name);
     }
 
     pub fn get_parameter_or_variable(self: *FunctionTable, name: []const u8) ?*VariableEntry {
@@ -86,10 +111,13 @@ pub const FunctionTable = struct {
 
 pub const GlobalTable = struct {
     table: std.StringHashMap(FunctionTable),
-
+    constants: std.StringHashMap(ConstantEntry),
+    string_literal_counter: u32 = 0,
     pub fn init(allocator: std.mem.Allocator) !*GlobalTable {
         var global_table = try allocator.create(GlobalTable);
         global_table.table = std.StringHashMap(FunctionTable).init(allocator);
+        global_table.constants = std.StringHashMap(ConstantEntry).init(allocator);
+        global_table.string_literal_counter = 0;
         return global_table;
     }
 
@@ -100,6 +128,14 @@ pub const GlobalTable = struct {
             entry.value_ptr.deinit(allocator);
         }
         self.table.deinit();
+        var const_iter = self.constants.iterator();
+        while (const_iter.next()) |entry| {
+            allocator.free(entry.key_ptr.*);
+            if (entry.value_ptr.value == .string_label) {
+                allocator.free(entry.value_ptr.value.string_label);
+            }
+        }
+        self.constants.deinit();
         allocator.destroy(self);
     }
 
@@ -110,6 +146,20 @@ pub const GlobalTable = struct {
 
     pub fn get_function(self: *GlobalTable, name: []const u8) ?*FunctionTable {
         return self.table.getPtr(name);
+    }
+
+    pub fn insert_global_constant(self: *GlobalTable, allocator: std.mem.Allocator, name: []const u8, _type: Types, value: ConstantValue) !void {
+        try self.constants.put(try allocator.dupe(u8, name), .{ .type = _type, .value = value });
+    }
+
+    pub fn get_global_constant(self: *GlobalTable, name: []const u8) ?*ConstantEntry {
+        return self.constants.getPtr(name);
+    }
+
+    pub fn generate_string_label(self: *GlobalTable, allocator: std.mem.Allocator) ![]const u8 {
+        const label = try std.fmt.allocPrint(allocator, ".LC{d}", .{self.string_literal_counter});
+        self.string_literal_counter += 1;
+        return label;
     }
 
     pub fn calculate_offsets(self: *GlobalTable) !void {
@@ -155,22 +205,36 @@ pub const GlobalTable = struct {
 
 pub fn create_global_table(allocator: std.mem.Allocator, ast: *Node) !*GlobalTable {
     const symbol_table = try GlobalTable.init(allocator);
-    for (ast.program.items) |function| {
-        try symbol_table.insert_new_function(allocator, function.function_def.name, function.function_def.return_type);
-        const function_table = symbol_table.get_function(function.function_def.name) orelse unreachable;
-        if (function.function_def.parameters.items.len == 0) {
-            continue;
-        }
-        for (function.function_def.parameters.items) |parameter| {
-            const param_type = parameter.function_parameter.type;
-            const param_name = parameter.function_parameter.name;
-            try function_table.insert_new_parameter(allocator, param_name, param_type);
+    for (ast.program.items) |item| {
+        if (item.* == .function_def) {
+            try symbol_table.insert_new_function(allocator, item.function_def.name, item.function_def.return_type);
+            const function_table = symbol_table.get_function(item.function_def.name) orelse unreachable;
+
+            for (item.function_def.parameters.items) |parameter| {
+                const param_type = parameter.function_parameter.type;
+                const param_name = parameter.function_parameter.name;
+                try function_table.insert_new_parameter(allocator, param_name, param_type);
+            }
+        } else if (item.* == .const_decleration) {
+            const const_decl = item.const_decleration;
+            if (const_decl.expression.* == .integer_literal) {
+                const value = ConstantValue{ .int_value = @intCast(const_decl.expression.integer_literal.value) };
+                try symbol_table.insert_global_constant(allocator, const_decl.identifier, const_decl.type, value);
+            } else if (const_decl.expression.* == .string_literal) {
+                const label = try symbol_table.generate_string_label(allocator);
+                const value = ConstantValue{ .string_label = label };
+                try symbol_table.insert_global_constant(allocator, const_decl.identifier, const_decl.type, value);
+            } else {
+                return error.UnsupportedConstantExpression;
+            }
         }
     }
-    for (ast.program.items) |function| {
-        const function_table = symbol_table.get_function(function.function_def.name) orelse unreachable;
-        for (function.function_def.statement_list.items) |statement| {
-            try check_for_variable_decleration(allocator, symbol_table, function_table, statement);
+    for (ast.program.items) |item| {
+        if (item.* == .function_def) {
+            const function_table = symbol_table.get_function(item.function_def.name) orelse unreachable;
+            for (item.function_def.statement_list.items) |statement| {
+                try check_for_variable_decleration(allocator, symbol_table, function_table, statement);
+            }
         }
     }
     return symbol_table;
@@ -180,6 +244,19 @@ fn check_for_variable_decleration(allocator: std.mem.Allocator, symbol_table: *G
     switch (statement.*) {
         .decleration => {
             try function_table.insert_new_variable(allocator, statement.decleration.identifier, statement.decleration.type);
+        },
+        .const_decleration => |const_decl| {
+            if (const_decl.expression.* == .integer_literal) {
+                const value = ConstantValue{ .int_value = @intCast(const_decl.expression.integer_literal.value) };
+                try function_table.insert_new_constant(allocator, const_decl.identifier, const_decl.type, value);
+            } else if (const_decl.expression.* == .string_literal) {
+                const label = try symbol_table.generate_string_label(allocator);
+                const value = ConstantValue{ .string_label = label };
+                try function_table.insert_new_constant(allocator, const_decl.identifier, const_decl.type, value);
+            } else {
+                // For now, only support literal constants
+                return error.UnsupportedConstantExpression;
+            }
         },
         .if_statement => {
             for (statement.if_statement.statement_list.items) |stmt| {
